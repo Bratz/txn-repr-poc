@@ -13,6 +13,12 @@ from .partitioning_embedder import (
     PAPER_ALPHA_V,
     PAPER_ALPHA_D,
 )
+from .quantizer import (
+    AdaptiveQuantizer,
+    geometric_levels,
+    make_quantizer_embedder,
+    DEFAULT_NUM_LEVELS,
+)
 
 __all__ = [
     "PartitioningEmbedder",
@@ -22,4 +28,8 @@ __all__ = [
     "PAPER_B",
     "PAPER_ALPHA_V",
     "PAPER_ALPHA_D",
+    "AdaptiveQuantizer",
+    "geometric_levels",
+    "make_quantizer_embedder",
+    "DEFAULT_NUM_LEVELS",
 ]
