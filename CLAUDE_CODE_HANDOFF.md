@@ -161,7 +161,10 @@ Always paste the §0 guardrails into the session. Claude Code should leave
 
 - [x] Phase 0 — C1/C2 thresholds committed to config
 - [x] Phase 1 — generator + schema verified
-- [ ] Phase 2 — partitioned beats/matches classical at ~½ params (C1); encoder frozen
+- [~] Phase 2 — Layers 2+3 BUILT (2a–2e) and unit-tested; encoder `freeze()` ready.
+      C1 param half CONFIRMED (embedding-table ratio ~0.057 << 0.55). C1 accuracy
+      half (≤1pp recon give-up) PENDING the full 25M/3-epoch run — deferred to GPU
+      (CPU est. ~12h for `--compare`). Run command in §6 below.
 - [ ] Phase 3 — well-formed predictions; trainable-param count recorded; freeze asserted
 - [ ] Phase 4 — baseline table; C2 verdict; imbalance-aware metrics
 
@@ -173,3 +176,23 @@ Both claims resolved with numbers: C1 (partitioning parameter efficiency) and
 C2 (adapter beats CatBoost, rivals full-tune at a fraction of trainable params),
 on imbalance-aware metrics, with every component traceable to a paper section or
 one of the three sanctioned departures. Anything beyond that is v2.
+
+---
+
+## 6. Running the C1 comparison (GPU)
+
+The encoder + composite loss + partitioned-vs-classical harness are built and
+unit-tested. To produce the C1 ACCURACY half (the headline pinned-config number),
+run on a GPU box (CPU is ~12h):
+
+```
+# full pinned config: hidden=512, layers=8, heads=8, epochs=3, all 200K rows
+python -m encoder.tabular_encoder --compare
+```
+
+Prints, for partitioned and classical high-card embedders: per-column top-1/top-3
+masked reconstruction accuracy, the high-card param ratio (vs ≤0.55) and the mean
+top-1 recon gap (vs ≤1.0pp), with a PASS/FAIL C1 verdict. Defaults read the
+pinned shape from `EncoderConfig`; `--limit` caps rows (logged, not silent) for a
+labelled proxy. The full run is deliberately deferred to GPU — do NOT shrink the
+25M/3-epoch config to force a CPU pass (that voids the headline result, §0.2).
