@@ -1,0 +1,16 @@
+# generated data — never commit
+*.parquet
+*.csv
+!data/pacs008_sample_500.csv     # keep the small sample for reference
+data/column_schema.json          # regenerated; example version is committed
+
+# model artifacts
+*.pt
+*.ckpt
+party_store/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/

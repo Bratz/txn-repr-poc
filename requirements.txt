@@ -1,0 +1,11 @@
+# Phase 1 (data generation) — already needed
+numpy>=1.26
+pandas>=2.0
+pyarrow>=14.0          # parquet output (falls back to CSV if absent)
+pyyaml>=6.0            # reads configs/default.yaml
+
+# Phase 2+ (encoder / decoder) — uncomment as you reach each phase
+# torch>=2.2
+# transformers>=4.40
+# catboost>=1.2        # Phase 4 baseline
+# scikit-learn>=1.4    # Phase 4 metrics

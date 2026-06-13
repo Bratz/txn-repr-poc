@@ -1,0 +1,126 @@
+# =============================================================================
+# default.yaml — shared prototype config
+#
+# Phase 0 task: fill in the `threshold` values under `claims:`. Everything else
+# is PINNED to the paper (arXiv:2410.07851) and should not be edited in v1.
+# Edit a pinned value only if raising a sanctioned 4th departure (see §0 of
+# CLAUDE_CODE_HANDOFF.md) — otherwise leave as-is.
+#
+# Legend:  PAPER = fixed by the source paper, do not retune
+#          FORCED = one of the three sanctioned departures
+#          TODO   = Phase 0 must set this number
+# =============================================================================
+
+project:
+  name: txn-repr-fraud-poc
+  paper: "arXiv:2410.07851"
+  scope: v1-grounded            # no extensions beyond the paper
+  use_case: fraud_risk_tagging
+
+# -----------------------------------------------------------------------------
+# Falsifiable claims under test. Phase 0 sets the `threshold` for each.
+# A run "passes" only if the measured metric meets the threshold.
+# -----------------------------------------------------------------------------
+claims:
+  C1_partitioning_param_efficiency:
+    statement: >
+      The §3.1 partitioning embedder matches classical embeddings on masked-column
+      reconstruction while using substantially fewer embedding parameters.
+    metrics:
+      param_ratio:               # partitioned_params / classical_params
+        target: lower_is_better
+        threshold: 0.55          # TODO confirm (paper ≈ 100M/185M ≈ 0.54)
+      recon_accuracy_gap:        # classical_acc - partitioned_acc (pp)
+        target: lower_is_better
+        threshold: 1.0           # TODO set max acceptable accuracy give-up (pp)
+
+  C2_adapter_vs_baselines:
+    statement: >
+      The §4 frozen-encoder + frozen-LLM adapter model beats the CatBoost baseline
+      and rivals full fine-tuning at a fraction of trainable parameters.
+    metrics:
+      pr_auc_gain_vs_catboost:   # adapter_PR_AUC - catboost_PR_AUC (pp)
+        target: higher_is_better
+        threshold: 10.0          # TODO confirm desired margin (pp)
+      trainable_param_ratio:     # adapter_trainable / fulltune_trainable
+        target: lower_is_better
+        threshold: 0.10          # TODO confirm "<10% of full-tune" target
+      pr_auc_gap_vs_fulltune:    # fulltune_PR_AUC - adapter_PR_AUC (pp); "rivals"
+        target: lower_is_better
+        threshold: 3.0           # TODO set max acceptable gap vs full-tune (pp)
+
+# -----------------------------------------------------------------------------
+# Sanctioned departures from the paper. Exactly three. Adding a fourth requires
+# an explicit decision (do not silently introduce).
+# -----------------------------------------------------------------------------
+departures:
+  - id: pacs008_schema
+    note: pacs.008 column set replaces the paper's generic synthetic columns.
+  - id: currency_conditioned_quantization
+    note: quantize amounts within Ccy; correctness fix for multi-currency input.
+  - id: imbalance_aware_metrics
+    note: PR-AUC / recall@FPR / F1 replace accuracy (imbalanced risk label).
+
+# -----------------------------------------------------------------------------
+# Synthetic data generator (Algorithm 1). POC defaults; scale up for paper vocab.
+# -----------------------------------------------------------------------------
+data:
+  num_parents: 4000             # → ~20000 to approach paper's ~125K acct vocab
+  num_transactions: 500000      # → 1_000_000+ for full-scale run
+  seed: 7
+  schema_file: column_schema.json
+  label_column: risk_label
+  label_values: [Low, Medium, High]
+
+# -----------------------------------------------------------------------------
+# Layer 2 field encoders
+# -----------------------------------------------------------------------------
+partitioning_embedder:          # §3.1 — PAPER, do not retune
+  B: 4
+  alpha_v: -3
+  alpha_d: 2.25
+
+quantizer:                      # §3.3
+  finer_spacing_for_small: true # PAPER
+  condition_on_currency: true   # FORCED (departure: currency_conditioned_quantization)
+
+party_encoder:                  # §3.2
+  objective: masked_attribute_reconstruction   # chosen v1 default (arch.md §7)
+  inject: pooled_summary        # PAPER — summary, not flattened inline
+  store: party_embedding_store  # persistent keyed lookup, not a cache
+
+# -----------------------------------------------------------------------------
+# Layer 3 tabular encoder
+# -----------------------------------------------------------------------------
+tabular_encoder:                # §3.4 + BERT — PAPER
+  backbone: bert_bidirectional
+  size_params: 25_000_000       # paper "small"
+  epochs: 3                     # paper ablation sweet spot
+  loss:
+    reconstruction: true        # masked-column
+    batch_hard_triplet: true    # positives = two perturbed views of x
+  freeze_after_pretrain: true   # INVARIANT — encoder frozen for Layer 4
+
+# -----------------------------------------------------------------------------
+# Layer 4 multimodal decoder
+# -----------------------------------------------------------------------------
+decoder:                        # §4 / §4.1 — PAPER
+  llm: phi                      # frozen
+  records_per_example: 1        # v1 single-record (no chain task)
+  row_sentinels: true           # [R1], [R2], … as LLM-vocab tokens
+  trainable:                    # ONLY these three train; f and LLM frozen
+    adapters_Phi: true
+    task_embedding_psi: true
+    prompt_params_phi: true
+  freeze_assert: true           # assert requires_grad=False on f and LLM
+
+# -----------------------------------------------------------------------------
+# Layer 5 evaluation
+# -----------------------------------------------------------------------------
+eval:
+  primary_metrics: [pr_auc, recall_at_fixed_fpr, f1_at_threshold]   # FORCED
+  fixed_fpr: 0.01               # TODO confirm operating FPR for recall@FPR
+  report_accuracy_alongside: true   # only for comparability to paper tables
+  baselines:
+    catboost: true
+    full_finetune: optional     # needed for C2 trainable_param_ratio
