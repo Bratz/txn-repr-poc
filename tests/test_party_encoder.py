@@ -1,8 +1,5 @@
 """Unit tests for the §3.2 party encoder + party-embedding store."""
 
-import json
-from pathlib import Path
-
 import numpy as np
 import pytest
 import torch
@@ -14,8 +11,6 @@ from encoders.party_encoder import (
     build_party_store,
     party_roles_from_schema,
 )
-
-SCHEMA_PATH = Path(__file__).resolve().parents[1] / "data" / "column_schema.json"
 
 
 def _toy_encoder(dim=64):
@@ -140,8 +135,7 @@ def test_store_save_load_roundtrip(tmp_path):
 # Schema-driven role extraction (reads buckets from column_schema.json)
 # --------------------------------------------------------------------------- #
 
-def test_roles_from_schema_picks_structured_roles_only():
-    schema = json.loads(SCHEMA_PATH.read_text())
+def test_roles_from_schema_picks_structured_roles_only(schema):
     roles = party_roles_from_schema(schema)
     # Dbtr and Cdtr carry the full {Ctry, Industry, SubIndustry} trio + an acct key.
     assert set(roles) == {"Dbtr", "Cdtr"}

@@ -28,6 +28,12 @@ from .party_encoder import (
     encode_role_parties,
     PARTY_STRUCT_ATTRS,
 )
+from .column_assembler import (
+    ColumnAssembler,
+    ColumnVocabs,
+    build_vocabs,
+    build_party_matrix,
+)
 
 __all__ = [
     "PartitioningEmbedder",
@@ -48,4 +54,8 @@ __all__ = [
     "build_field_vocabs",
     "encode_role_parties",
     "PARTY_STRUCT_ATTRS",
+    "ColumnAssembler",
+    "ColumnVocabs",
+    "build_vocabs",
+    "build_party_matrix",
 ]

@@ -4,9 +4,6 @@ The headline assertion (handoff Phase 2a exit): partitioned embedding-table
 param count < classical, for the realized schema vocabs.
 """
 
-import json
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -19,13 +16,6 @@ from encoders.partitioning_embedder import (
     param_efficiency,
     power_law_partition,
 )
-
-SCHEMA_PATH = Path(__file__).resolve().parents[1] / "data" / "column_schema.json"
-
-
-def _realized_vocabs():
-    schema = json.loads(SCHEMA_PATH.read_text())
-    return schema["vocab"]
 
 
 # --------------------------------------------------------------------------- #
@@ -65,8 +55,8 @@ def test_partition_rejects_total_below_B():
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize("dim", [64, 128, 256])
-def test_partitioned_fewer_params_than_classical(dim):
-    vocab = _realized_vocabs()
+def test_partitioned_fewer_params_than_classical(dim, schema):
+    vocab = schema["vocab"]
     targets = ["combined_account_id_vocab", "combined_parent_id_vocab",
                "DbtrAcct_Id", "CdtrAcct_Id", "UltmtDbtr_Id", "UltmtCdtr_Id"]
     for key in targets:
@@ -76,11 +66,10 @@ def test_partitioned_fewer_params_than_classical(dim):
         assert part.num_embedding_parameters() < clf.num_embedding_parameters(), key
 
 
-def test_param_ratio_meets_c1_threshold():
+def test_param_ratio_meets_c1_threshold(schema):
     # C1 param_ratio threshold (configs/default.yaml) is 0.55 for the headline
     # account vocab; the table ratio is far below that.
-    vocab = _realized_vocabs()
-    r = param_efficiency(vocab["combined_account_id_vocab"], 128)
+    r = param_efficiency(schema["vocab"]["combined_account_id_vocab"], 128)
     assert r["param_ratio"] < 0.55
     assert r["partitioned_params"] < r["classical_params"]
 
