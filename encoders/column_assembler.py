@@ -39,7 +39,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .partitioning_embedder import PartitioningEmbedder
+from .partitioning_embedder import ClassicalEmbedder, PartitioningEmbedder
 from .party_encoder import PartyStore, party_roles_from_schema
 from .quantizer import AdaptiveQuantizer, make_quantizer_embedder
 
@@ -120,10 +120,12 @@ class ColumnAssembler(nn.Module):
         party_store: PartyStore,
         embedding_dim: int = 128,
         partition_kwargs: dict | None = None,
+        high_card_embedder: str = "partitioned",
     ):
         super().__init__()
         self.embedding_dim = D = int(embedding_dim)
         self.vocabs = vocabs
+        self.high_card_embedder = high_card_embedder
         pk = partition_kwargs or {}
 
         # Routes read from the schema (never hard-coded — §0.4).
@@ -136,13 +138,25 @@ class ColumnAssembler(nn.Module):
             )
 
         # §3.1 high-card embedders — one per column, frequency-aware bin assignment.
-        self.hc_emb = nn.ModuleDict({
-            col: PartitioningEmbedder(
-                vocabs.hc_size(col), D,
-                token_frequencies=vocabs.high_card_freq[col], **pk,
+        # "classical" swaps in the dense-table control for the C1 comparison.
+        if high_card_embedder == "partitioned":
+            self.hc_emb = nn.ModuleDict({
+                col: PartitioningEmbedder(
+                    vocabs.hc_size(col), D,
+                    token_frequencies=vocabs.high_card_freq[col], **pk,
+                )
+                for col in self.high_card_cols
+            })
+        elif high_card_embedder == "classical":
+            self.hc_emb = nn.ModuleDict({
+                col: ClassicalEmbedder(vocabs.hc_size(col), D)
+                for col in self.high_card_cols
+            })
+        else:
+            raise ValueError(
+                f"high_card_embedder must be 'partitioned' or 'classical', "
+                f"got {high_card_embedder!r}"
             )
-            for col in self.high_card_cols
-        })
 
         # core inline embeddings.
         self.core_emb = nn.ModuleDict({
