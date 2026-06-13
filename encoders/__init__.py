@@ -19,6 +19,15 @@ from .quantizer import (
     make_quantizer_embedder,
     DEFAULT_NUM_LEVELS,
 )
+from .party_encoder import (
+    PartyEncoder,
+    PartyStore,
+    build_party_store,
+    party_roles_from_schema,
+    build_field_vocabs,
+    encode_role_parties,
+    PARTY_STRUCT_ATTRS,
+)
 
 __all__ = [
     "PartitioningEmbedder",
@@ -32,4 +41,11 @@ __all__ = [
     "geometric_levels",
     "make_quantizer_embedder",
     "DEFAULT_NUM_LEVELS",
+    "PartyEncoder",
+    "PartyStore",
+    "build_party_store",
+    "party_roles_from_schema",
+    "build_field_vocabs",
+    "encode_role_parties",
+    "PARTY_STRUCT_ATTRS",
 ]
