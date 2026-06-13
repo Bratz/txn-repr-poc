@@ -158,6 +158,15 @@ class DecoderConfig:
     adapter_tokens: int = 1
     prefix_len: int = 8
     task_shared_dim: Optional[int] = None
+    # φ realization (paper leaves the injection unspecified, "similar to prompt
+    # tuning"):
+    #   "prefix" — per-layer learnable prefix KV (prefix-tuning); most faithful to
+    #     "augment each layer", but on a real HF LLM the past_key_values path is
+    #     version-fragile (may be ignored when use_cache=False during training).
+    #   "prompt" — input-level learnable soft prompt prepended to z (prompt
+    #     tuning); single-layer, but gets gradient through ANY HF model via
+    #     inputs_embeds. Robust default for the real run.
+    phi_mode: str = "prefix"
 
 
 class MultimodalDecoder(nn.Module):
@@ -174,11 +183,27 @@ class MultimodalDecoder(nn.Module):
         self.adapter = Adapter(encoder.D, d_llm, config.adapter_layers,
                                config.adapter_heads, config.adapter_tokens)
         self.task_embedding = TaskEmbedding(config.n_tasks, d_llm, config.task_shared_dim)
-        self.prefix = PrefixEncoder(llm.num_layers, llm.num_heads, llm.head_dim,
-                                    config.prefix_len)
+        self.phi_mode = config.phi_mode
+        if config.phi_mode == "prefix":
+            self.prefix = PrefixEncoder(llm.num_layers, llm.num_heads, llm.head_dim,
+                                        config.prefix_len)
+            self.soft_prompt = None
+        elif config.phi_mode == "prompt":
+            self.prefix = None
+            self.soft_prompt = nn.Parameter(torch.randn(config.prefix_len, d_llm) * 0.02)
+        else:
+            raise ValueError(f"phi_mode must be 'prefix' or 'prompt', got {config.phi_mode!r}")
         self.row_sentinel = nn.Parameter(torch.randn(d_llm) * 0.02)  # [R1]
 
         self._freeze_base()
+
+    def _prefixes(self, batch_size: int):
+        """Per-layer φ prefixes (prefix mode) or None (prompt mode)."""
+        return self.prefix(batch_size) if self.phi_mode == "prefix" else None
+
+    def phi_param(self) -> torch.Tensor:
+        """The trainable φ tensor — for the grad-check in the run harness."""
+        return self.prefix.prefix if self.phi_mode == "prefix" else self.soft_prompt
 
     # -- freeze invariant (handoff §0.3) ---------------------------------- #
     def _freeze_base(self):
@@ -214,7 +239,11 @@ class MultimodalDecoder(nn.Module):
         instr = self.llm.embed_tokens(instruction_ids)                  # (B,S_t,Dllm)
         task = self.task_embedding(task_ids).unsqueeze(1)               # (B,1,Dllm)
 
-        z = torch.cat([sentinel, record, instr, task], dim=1)           # (B,S_z,Dllm)
+        parts = []
+        if self.phi_mode == "prompt":                                   # φ as soft prompt
+            parts.append(self.soft_prompt.unsqueeze(0).expand(B, -1, -1))
+        parts += [sentinel, record, instr, task]
+        z = torch.cat(parts, dim=1)                                     # (B,S_z,Dllm)
         mask = torch.ones(z.shape[0], z.shape[1], device=z.device)
         return z, mask
 
@@ -226,7 +255,7 @@ class MultimodalDecoder(nn.Module):
         y_mask = torch.ones(target_ids.shape[0], target_ids.shape[1], device=z.device)
         mask = torch.cat([z_mask, y_mask], dim=1)
 
-        prefixes = self.prefix(inputs.shape[0])
+        prefixes = self._prefixes(inputs.shape[0])
         logits = self.llm.forward_embeds(inputs, mask, prefixes)        # (B,S,vocab)
 
         # Labels: ignore the z prefix and the prefix-tuning positions; supervise
@@ -256,7 +285,7 @@ class MultimodalDecoder(nn.Module):
         first response position (B, n_labels)."""
         self.eval()
         z, z_mask = self.build_inputs(batch, task_ids, instruction_ids)
-        logits = self.llm.forward_embeds(z, z_mask, self.prefix(z.shape[0]))
+        logits = self.llm.forward_embeds(z, z_mask, self._prefixes(z.shape[0]))
         # the last z position predicts the first response token
         pad = logits.shape[1] - z.shape[1]
         next_logits = logits[:, pad + z.shape[1] - 1, :]          # (B, vocab)

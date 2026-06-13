@@ -152,6 +152,35 @@ def test_predict_proba_is_well_formed(decoder_stack):
     assert (proba >= 0).all()
 
 
+def test_prompt_mode_trains_via_inputs_embeds(request):
+    # φ="prompt" must work with NO past_key_values (robust HF path): soft prompt
+    # gets gradient, build_inputs grows by prefix_len, predict_proba well-formed.
+    schema = request.getfixturevalue("schema")
+    df = request.getfixturevalue("sample_df")
+    torch.manual_seed(0)
+    enc, asm, vocabs = build_pretraining_stack(df, schema, TINY_ENC, party_epochs=1)
+    llm = MockLLM(vocab_size=64, hidden=32, num_layers=2, num_heads=4)
+    dec = MultimodalDecoder(enc, llm, DecoderConfig(n_tasks=3, prefix_len=4,
+                                                    adapter_heads=4, phi_mode="prompt"))
+    assert dec.prefix is None and dec.soft_prompt is not None
+    head = df.head(8)
+    batch = vocabs.encode(head)
+    task = torch.zeros(8, dtype=torch.long)
+    instr = torch.randint(0, 64, (8, 4))
+    tgt = torch.tensor([[_RISK[r]] for r in head["risk_label"]])
+
+    z, _ = dec.build_inputs(batch, task, instr)
+    assert z.shape[1] == 4 + 1 + 1 + 4 + 1     # soft(4)+sentinel+adapter+instr(4)+task
+
+    dec.zero_grad()
+    dec(batch, task, instr, tgt).backward()
+    assert dec.phi_param() is dec.soft_prompt
+    assert dec.soft_prompt.grad is not None and torch.any(dec.soft_prompt.grad != 0)
+    proba = dec.predict_proba(batch, task, instr, [0, 1, 2])
+    assert proba.shape == (8, 3)
+    torch.testing.assert_close(proba.sum(dim=1), torch.ones(8))
+
+
 def test_prefix_changes_llm_output():
     torch.manual_seed(0)
     llm = MockLLM(vocab_size=32, hidden=16, num_layers=2, num_heads=2)

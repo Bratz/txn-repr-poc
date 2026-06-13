@@ -181,10 +181,13 @@ def run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, thresholds,
                        instr.unsqueeze(0).expand(B, -1), tgt_train[sl])
             opt.zero_grad(); loss.backward()
             if not checked:                          # φ grad-check (see module header)
-                g = dec.prefix.prefix.grad
+                g = dec.phi_param().grad
                 if g is None or float(g.abs().sum()) == 0.0:
-                    log("WARNING: φ prefix received no gradient — on a real HF LLM "
-                        "switch φ to peft.PrefixTuning (see run_gpu.py header).")
+                    log(f"WARNING: phi ({dec.phi_mode}) received no gradient. Use "
+                        "--phi-mode prompt (robust soft prompt) or peft.PrefixTuning.")
+                else:
+                    log(f"  phi grad-check OK (mode={dec.phi_mode}, "
+                        f"|grad|={float(g.abs().sum()):.3e})")
                 checked = True
             opt.step(); tot += loss.item(); nb += 1
         log(f"  epoch {ep+1}/{decoder_epochs}  loss {tot/nb:.4f}")
@@ -270,6 +273,9 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--eval-rows", type=int, default=4096)
     ap.add_argument("--decoder-epochs", type=int, default=1)   # paper §5.2: 1 epoch
+    ap.add_argument("--phi-mode", choices=["prompt", "prefix"], default="prompt",
+                    help="prompt = robust soft prompt (default); prefix = per-layer "
+                         "(more faithful; needs peft on real HF)")
     ap.add_argument("--smoke-hidden", type=int, default=32)
     ap.add_argument("--out", default=str(ROOT / "results.json"))
     args = ap.parse_args()
@@ -293,10 +299,11 @@ def main():
     if args.smoke:
         enc_cfg = EncoderConfig(hidden=args.smoke_hidden, layers=2, heads=2,
                                 ff_mult=2, dropout=0.0, epochs=1)
-        dec_cfg = DecoderConfig(n_tasks=1, adapter_heads=4, prefix_len=4)
+        dec_cfg = DecoderConfig(n_tasks=1, adapter_heads=4, prefix_len=4,
+                                phi_mode=args.phi_mode)
     else:
         enc_cfg = EncoderConfig()                  # pinned 25M / 3 epochs
-        dec_cfg = DecoderConfig(n_tasks=1)
+        dec_cfg = DecoderConfig(n_tasks=1, phi_mode=args.phi_mode)
 
     df, schema = load_data_and_schema(args)
     train_df, eval_df = split(df, args.eval_rows, schema["label_column"])

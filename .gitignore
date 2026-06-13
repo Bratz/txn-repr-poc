@@ -15,6 +15,13 @@ party_store/
 # run outputs
 results.json
 
+# secrets — never commit SSH keys / tokens
+sshkey
+sshkey.pub
+*.pem
+id_rsa*
+*.bundle
+
 # python
 __pycache__/
 *.pyc
