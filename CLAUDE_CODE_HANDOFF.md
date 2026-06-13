@@ -165,7 +165,11 @@ Always paste the §0 guardrails into the session. Claude Code should leave
       C1 param half CONFIRMED (embedding-table ratio ~0.057 << 0.55). C1 accuracy
       half (≤1pp recon give-up) PENDING the full 25M/3-epoch run — deferred to GPU
       (CPU est. ~12h for `--compare`). Run command in §6 below.
-- [ ] Phase 3 — well-formed predictions; trainable-param count recorded; freeze asserted
+- [~] Phase 3 — Layer 4 decoder BUILT and unit-tested (Eq. 5 interleave, Eq. 6 NLL,
+      Φ/ψ/φ + [R1] sentinel; encoder f AND LLM frozen, `assert_frozen()`). C2 param
+      half RECORDED: trio ≈8.4M vs Phi-1.5 1.3B → ratio 0.0065 << 0.10. LLM is
+      pluggable (MockLLM tested on CPU; HFCausalLM for Phi). Well-formed predictions
+      + the C2 PR-AUC half need the GPU instruction-tuning run (see §6).
 - [ ] Phase 4 — baseline table; C2 verdict; imbalance-aware metrics
 
 ---
@@ -196,3 +200,15 @@ top-1 recon gap (vs ≤1.0pp), with a PASS/FAIL C1 verdict. Defaults read the
 pinned shape from `EncoderConfig`; `--limit` caps rows (logged, not silent) for a
 labelled proxy. The full run is deliberately deferred to GPU — do NOT shrink the
 25M/3-epoch config to force a CPU pass (that voids the headline result, §0.2).
+
+C2 trainable-param half (no GPU needed):
+
+```
+python -m decoder.multimodal_decoder --llm phi-1_5   # trio vs full-tune ratio
+```
+
+The C2 PR-AUC half (adapter vs CatBoost vs full-tune) is the Layer-4 instruction-
+tuning run: build with `HFCausalLM("microsoft/phi-1_5")` (frozen) + the frozen
+pretrained encoder, then optimise only `{Φ, ψ, φ}` with `MultimodalDecoder.loss`
+on templated risk-tagging prompts. GPU — needs the frozen encoder from the C1 run
+first. The CPU suite covers all of this against MockLLM.
