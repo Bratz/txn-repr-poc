@@ -142,6 +142,16 @@ def test_training_reduces_loss(request):
     assert final < initial * 0.9, (initial, final)
 
 
+def test_predict_proba_is_well_formed(decoder_stack):
+    d = decoder_stack
+    label_token_ids = [0, 1, 2]                  # the 3 risk-label answer tokens
+    proba = d["dec"].predict_proba(d["batch"], d["task_ids"], d["instruction_ids"],
+                                   label_token_ids)
+    assert proba.shape == (d["B"], 3)
+    torch.testing.assert_close(proba.sum(dim=1), torch.ones(d["B"]))
+    assert (proba >= 0).all()
+
+
 def test_prefix_changes_llm_output():
     torch.manual_seed(0)
     llm = MockLLM(vocab_size=32, hidden=16, num_layers=2, num_heads=2)

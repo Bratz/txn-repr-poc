@@ -249,6 +249,20 @@ class MultimodalDecoder(nn.Module):
     def loss(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
+    @torch.no_grad()
+    def predict_proba(self, batch: dict, task_ids, instruction_ids,
+                      label_token_ids) -> torch.Tensor:
+        """Well-formed label distribution: softmax over the answer tokens at the
+        first response position (B, n_labels)."""
+        self.eval()
+        z, z_mask = self.build_inputs(batch, task_ids, instruction_ids)
+        logits = self.llm.forward_embeds(z, z_mask, self.prefix(z.shape[0]))
+        # the last z position predicts the first response token
+        pad = logits.shape[1] - z.shape[1]
+        next_logits = logits[:, pad + z.shape[1] - 1, :]          # (B, vocab)
+        label_ids = torch.as_tensor(label_token_ids, device=z.device)
+        return F.softmax(next_logits.index_select(1, label_ids), dim=1)
+
 
 # --------------------------------------------------------------------------- #
 # MockLLM — self-contained tiny causal LM exercising the φ prefix path (CPU test)

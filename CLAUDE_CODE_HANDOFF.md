@@ -170,7 +170,11 @@ Always paste the §0 guardrails into the session. Claude Code should leave
       half RECORDED: trio ≈8.4M vs Phi-1.5 1.3B → ratio 0.0065 << 0.10. LLM is
       pluggable (MockLLM tested on CPU; HFCausalLM for Phi). Well-formed predictions
       + the C2 PR-AUC half need the GPU instruction-tuning run (see §6).
-- [ ] Phase 4 — baseline table; C2 verdict; imbalance-aware metrics
+- [~] Phase 4 — imbalance-aware metrics (PR-AUC, recall@FPR, F1; accuracy alongside)
+      + CatBoost baseline BUILT and unit-tested; C2 table harness wired. CatBoost
+      run on full 200K: PR-AUC 0.635, recall@1%FPR 0.724, acc 0.873 (the 0.87/0.63
+      split is exactly why accuracy is misleading — departure #3). adapter /
+      full_tune PR-AUC columns fill in from the GPU decoder run (handoff §6).
 
 ---
 
