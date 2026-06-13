@@ -12,6 +12,8 @@ data/column_schema.json
 *.pt
 *.ckpt
 party_store/
+# run outputs
+results.json
 
 # python
 __pycache__/

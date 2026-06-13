@@ -7,7 +7,7 @@ from .metrics import (
     f1_at_threshold,
     c2_table,
 )
-from .baselines import train_catboost, feature_spec
+from .baselines import train_catboost, catboost_fit_predict, feature_spec
 
 __all__ = [
     "evaluate",
@@ -16,5 +16,6 @@ __all__ = [
     "f1_at_threshold",
     "c2_table",
     "train_catboost",
+    "catboost_fit_predict",
     "feature_spec",
 ]

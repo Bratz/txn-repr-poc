@@ -216,3 +216,35 @@ tuning run: build with `HFCausalLM("microsoft/phi-1_5")` (frozen) + the frozen
 pretrained encoder, then optimise only `{Φ, ψ, φ}` with `MultimodalDecoder.loss`
 on templated risk-tagging prompts. GPU — needs the frozen encoder from the C1 run
 first. The CPU suite covers all of this against MockLLM.
+
+---
+
+## 7. End-to-end run — `run_gpu.py` (vast.ai / any single GPU)
+
+`run_gpu.py` chains BOTH claims in one pass: generate/load data → C1 (pretrain
+partitioned + classical, freeze the partitioned encoder) → C2 (instruction-tune
+`{Φ, ψ, φ}` against frozen Phi, eval vs CatBoost on the SAME stratified split) →
+write `results.json` (C1 + C2 verdicts vs the `configs/default.yaml` thresholds).
+
+Identical control flow in both modes:
+```
+python run_gpu.py --smoke --data data/pacs008_sample_500.csv   # MockLLM, tiny, CPU
+python run_gpu.py                                              # 25M / Phi-1.5, GPU
+```
+
+On a vast.ai instance (PyTorch image, 1× ≥24 GB GPU — A10/A5000/3090/L4 fine):
+```
+git clone <repo> && cd txn-repr-poc
+pip install -r requirements.txt          # torch already in the vast image; + peft (see below)
+python data/synth_pacs008.py --parents 20000 --transactions 1000000 \
+    --out data/pacs008_synth.parquet --schema-out data/column_schema.json   # paper-scale vocab
+python run_gpu.py                        # writes results.json
+```
+`microsoft/phi-1_5` (~3 GB) downloads on first run. Memory is dominated by Phi
+activations on short single-record sequences + the 25M encoder — 24 GB is ample.
+
+KNOWN φ CAVEAT (validate on first run): the per-layer prefix is passed via
+`past_key_values`; some `transformers` versions ignore it when `use_cache=False`
+in a training forward, so φ may get no gradient. `run_gpu.py` prints a hard
+grad-check after the first decoder step. If it warns, `pip install peft` and swap
+φ to `peft.PrefixTuning` (true per-layer prefix) — Φ/ψ/sentinel are unaffected.

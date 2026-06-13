@@ -30,30 +30,32 @@ def feature_spec(schema: dict) -> tuple[list, list]:
     return features, categorical
 
 
-def train_catboost(df, schema, test_size: float = 0.2, seed: int = 7,
-                   iterations: int = 300, log=print):
-    """Fit CatBoost on raw features; return (y_true_test, proba_test, label_values).
+def _to_catboost_frame(df, schema):
+    """Raw feature frame: all columns categorical except the numerical amount."""
+    features, categorical = feature_spec(schema)
+    X = df[features].astype(str).copy()
+    num_col = schema["buckets"]["numerical"][0]
+    X[num_col] = df[num_col].astype(float).to_numpy()
+    cat_idx = [X.columns.get_loc(c) for c in categorical]
+    return X, cat_idx, features, categorical
 
-    proba columns are aligned to schema label_values order. Class weights are
-    balanced to counter the imbalanced risk label (the rare High class).
+
+def catboost_fit_predict(train_df, eval_df, schema, seed: int = 7,
+                         iterations: int = 300, log=print):
+    """Fit CatBoost on an explicit train frame, predict on an explicit eval frame.
+
+    Lets the baseline share the SAME split as the encoder/decoder so the C2 table
+    is comparable. Returns (y_eval_true, proba_eval, label_values, model).
     """
     from catboost import CatBoostClassifier, Pool
-    from sklearn.model_selection import train_test_split
 
     label_col = schema["label_column"]
     label_values = list(schema["label_values"])
-    features, categorical = feature_spec(schema)
+    X_tr, cat_idx, features, categorical = _to_catboost_frame(train_df, schema)
+    X_te, _, _, _ = _to_catboost_frame(eval_df, schema)
+    y_tr = train_df[label_col].astype(str).to_numpy()
+    y_te = eval_df[label_col].astype(str).to_numpy()
 
-    X = df[features].astype(str).copy()
-    # the single numerical column must stay numeric for CatBoost
-    num_col = schema["buckets"]["numerical"][0]
-    X[num_col] = df[num_col].astype(float).to_numpy()
-    y = df[label_col].astype(str).to_numpy()
-
-    X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=test_size, random_state=seed, stratify=y
-    )
-    cat_idx = [X.columns.get_loc(c) for c in categorical]
     model = CatBoostClassifier(
         iterations=iterations, depth=6, learning_rate=0.1,
         loss_function="MultiClass", auto_class_weights="Balanced",
@@ -63,12 +65,24 @@ def train_catboost(df, schema, test_size: float = 0.2, seed: int = 7,
         f"({len(categorical)} categorical), {iterations} iters ...")
     model.fit(Pool(X_tr, y_tr, cat_features=cat_idx))
 
-    proba = model.predict_proba(Pool(X_te, cat_features=cat_idx))
-    # align proba columns (model.classes_) to schema label_values order
+    proba = np.asarray(model.predict_proba(Pool(X_te, cat_features=cat_idx)))
     classes = [str(c) for c in model.classes_]
     order = [classes.index(v) for v in label_values]
-    proba = np.asarray(proba)[:, order]
-    return y_te, proba, label_values, model
+    return y_te, proba[:, order], label_values, model
+
+
+def train_catboost(df, schema, test_size: float = 0.2, seed: int = 7,
+                   iterations: int = 300, log=print):
+    """Fit CatBoost with an internal stratified split (standalone baseline CLI)."""
+    from sklearn.model_selection import train_test_split
+
+    label_col = schema["label_column"]
+    tr_idx, te_idx = train_test_split(
+        np.arange(len(df)), test_size=test_size, random_state=seed,
+        stratify=df[label_col].astype(str).to_numpy(),
+    )
+    return catboost_fit_predict(df.iloc[tr_idx], df.iloc[te_idx], schema,
+                                seed=seed, iterations=iterations, log=log)
 
 
 def main():
