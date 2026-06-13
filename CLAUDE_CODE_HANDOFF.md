@@ -159,7 +159,7 @@ Always paste the §0 guardrails into the session. Claude Code should leave
 
 ## 4. Per-phase acceptance checklist
 
-- [ ] Phase 0 — C1/C2 thresholds committed to config
+- [x] Phase 0 — C1/C2 thresholds committed to config
 - [x] Phase 1 — generator + schema verified
 - [ ] Phase 2 — partitioned beats/matches classical at ~½ params (C1); encoder frozen
 - [ ] Phase 3 — well-formed predictions; trainable-param count recorded; freeze asserted
