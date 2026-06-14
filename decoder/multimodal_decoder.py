@@ -379,7 +379,12 @@ class HFCausalLM(nn.Module):
         from transformers import AutoModelForCausalLM, AutoTokenizer  # lazy
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name)
+        # Force fp32: transformers 5.x loads the checkpoint's native dtype (fp16
+        # for phi-1_5), which collides with our fp32 adapter/soft-prompt embeds at
+        # Phi's LayerNorm ("expected Float but found Half"). .float() is version-
+        # agnostic (no torch_dtype/dtype kwarg churn); the LLM stays frozen, and
+        # fp32 Phi-1.5 (~5 GB) is trivial on the run GPU.
+        self.model = AutoModelForCausalLM.from_pretrained(model_name).float()
         cfg = self.model.config
         self.hidden_size = cfg.hidden_size
         self.num_layers = cfg.num_hidden_layers
@@ -391,6 +396,7 @@ class HFCausalLM(nn.Module):
         return self.model.get_input_embeddings()(ids)
 
     def forward_embeds(self, inputs_embeds, attention_mask, prefixes=None):
+        inputs_embeds = inputs_embeds.to(self.model.dtype)   # match frozen LLM dtype
         past = None
         if prefixes is not None:
             # HF expects past_key_values as a tuple of (key, value) per layer,
