@@ -167,6 +167,9 @@ class DecoderConfig:
     #     tuning); single-layer, but gets gradient through ANY HF model via
     #     inputs_embeds. Robust default for the real run.
     phi_mode: str = "prefix"
+    # train_llm=True UNFREEZES the LLM → the C2 "full fine-tune" comparator
+    # (frozen encoder + trainable LLM). The encoder is ALWAYS frozen.
+    train_llm: bool = False
 
 
 class MultimodalDecoder(nn.Module):
@@ -207,9 +210,11 @@ class MultimodalDecoder(nn.Module):
 
     # -- freeze invariant (handoff §0.3) ---------------------------------- #
     def _freeze_base(self):
-        self.encoder.freeze()                       # tabular encoder f
-        for p in self.llm_parameters():             # LLM base
-            p.requires_grad_(False)
+        self.encoder.freeze()                       # tabular encoder f — ALWAYS frozen
+        if not self.config.train_llm:               # frozen LLM (adapter mode)
+            for p in self.llm_parameters():
+                p.requires_grad_(False)
+        # else: LLM stays trainable → C2 full fine-tune comparator
 
     def llm_parameters(self):
         if isinstance(self.llm, nn.Module):
@@ -217,11 +222,14 @@ class MultimodalDecoder(nn.Module):
         return iter(())
 
     def assert_frozen(self):
-        """Hard-assert f and the LLM carry no trainable params (Eq. 6 invariant)."""
+        """Hard-assert the things that must be frozen are. The encoder is always
+        frozen; the LLM is frozen in adapter mode (Eq. 6 invariant) but trainable
+        in the full fine-tune comparator (train_llm=True)."""
         assert all(not p.requires_grad for p in self.encoder.parameters()), \
             "tabular encoder f must be frozen"
-        assert all(not p.requires_grad for p in self.llm_parameters()), \
-            "LLM must be frozen"
+        if not self.config.train_llm:
+            assert all(not p.requires_grad for p in self.llm_parameters()), \
+                "LLM must be frozen (adapter mode)"
 
     def trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

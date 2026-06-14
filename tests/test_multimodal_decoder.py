@@ -181,6 +181,36 @@ def test_prompt_mode_trains_via_inputs_embeds(request):
     torch.testing.assert_close(proba.sum(dim=1), torch.ones(8))
 
 
+def test_full_tune_unfreezes_llm_keeps_encoder_frozen(request):
+    # C2 full-tune comparator: train_llm=True → LLM trainable, encoder STILL frozen.
+    schema = request.getfixturevalue("schema")
+    df = request.getfixturevalue("sample_df")
+    torch.manual_seed(0)
+    enc, asm, vocabs = build_pretraining_stack(df, schema, TINY_ENC, party_epochs=1)
+    llm = MockLLM(vocab_size=64, hidden=32, num_layers=2, num_heads=4)
+    dec = MultimodalDecoder(enc, llm, DecoderConfig(n_tasks=3, prefix_len=4,
+                                                    adapter_heads=4, phi_mode="prompt",
+                                                    train_llm=True))
+    dec.assert_frozen()                                   # passes: encoder frozen, LLM allowed
+    assert all(not p.requires_grad for p in dec.encoder.parameters())
+    assert any(p.requires_grad for p in dec.llm.parameters())
+    # full-tune trains far more params than the adapter-only trio
+    adapter_only = sum(p.numel() for m in (dec.adapter, dec.task_embedding)
+                       for p in m.parameters()) + dec.soft_prompt.numel()
+    assert dec.trainable_parameters() > adapter_only + sum(
+        p.numel() for p in dec.llm.parameters()) - 1
+
+    head = df.head(8)
+    batch = vocabs.encode(head)
+    tgt = torch.tensor([[_RISK[r]] for r in head["risk_label"]])
+    dec.zero_grad()
+    dec(batch, torch.zeros(8, dtype=torch.long), torch.randint(0, 64, (8, 4)), tgt).backward()
+    # gradient reaches the (now trainable) LLM, but never the frozen encoder
+    assert any(p.grad is not None and torch.any(p.grad != 0) for p in dec.llm.parameters())
+    assert all(p.grad is None for p in dec.encoder.parameters())
+    dec.zero_grad()
+
+
 def test_prefix_changes_llm_output():
     torch.manual_seed(0)
     llm = MockLLM(vocab_size=32, hidden=16, num_layers=2, num_heads=2)

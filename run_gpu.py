@@ -144,33 +144,14 @@ def build_llm(args, device):
     return llm, instr, answers
 
 
-def run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, thresholds,
-           c1_param_ratio_trio, device, decoder_epochs, batch_size, log):
-    from decoder.multimodal_decoder import DecoderConfig, MultimodalDecoder
-    from eval.baselines import catboost_fit_predict
-    from eval.metrics import c2_table
-
-    enc, vocabs = frozen["encoder"], frozen["vocabs"]
-    llm, instr, answer_tokens = llm_bundle
-    label_values = schema["label_values"]
-    label_col = schema["label_column"]
-
-    dec = MultimodalDecoder(enc, llm, dec_cfg).to(device)
-    dec.assert_frozen()
-
-    def targets(frame):
-        idx = frame[label_col].map({v: i for i, v in enumerate(label_values)}).to_numpy()
-        return torch.tensor([[answer_tokens[i]] for i in idx], device=device)
-
-    train_batch = _to_device(vocabs.encode(train_df), device)
-    n = len(train_df)
+def _train_decoder(dec, train_batch, tgt_train, instr, n, epochs, batch_size,
+                   device, log, label, grad_check=False):
+    """Instruction-tuning loop shared by the adapter and the full-tune comparator."""
     opt = torch.optim.Adam([p for p in dec.parameters() if p.requires_grad], lr=1e-4)
-    tgt_train = targets(train_df)
-    log(f"[C2] instruction-tune trio {{Phi,psi,phi}} "
-        f"({dec.trainable_parameters():,} params), {decoder_epochs} epoch(s) ...")
+    log(f"[C2] {label}: train {dec.trainable_parameters():,} params, {epochs} epoch(s) ...")
     dec.train()
-    checked = False
-    for ep in range(decoder_epochs):
+    checked = not grad_check
+    for ep in range(epochs):
         perm = torch.randperm(n)
         tot, nb = 0.0, 0
         for s in range(0, n, batch_size):
@@ -190,26 +171,67 @@ def run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, thresholds,
                         f"|grad|={float(g.abs().sum()):.3e})")
                 checked = True
             opt.step(); tot += loss.item(); nb += 1
-        log(f"  epoch {ep+1}/{decoder_epochs}  loss {tot/nb:.4f}")
+        log(f"  {label} epoch {ep+1}/{epochs}  loss {tot/nb:.4f}")
+    return dec
 
-    # adapter predictions on the eval split (chunked)
-    adapter_proba = _predict_chunked(dec, vocabs, eval_df, instr, answer_tokens,
-                                     device, batch_size)
+
+def run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, thresholds,
+           device, decoder_epochs, batch_size, log,
+           full_tune_llm=None, full_tune_epochs=1):
+    from dataclasses import replace
+
+    from decoder.multimodal_decoder import MultimodalDecoder
+    from eval.baselines import catboost_fit_predict
+    from eval.metrics import c2_table
+
+    enc, vocabs = frozen["encoder"], frozen["vocabs"]
+    llm, instr, answer_tokens = llm_bundle
+    label_values = schema["label_values"]
+    label_col = schema["label_column"]
+
+    def targets(frame):
+        idx = frame[label_col].map({v: i for i, v in enumerate(label_values)}).to_numpy()
+        return torch.tensor([[answer_tokens[i]] for i in idx], device=device)
+
+    train_batch = _to_device(vocabs.encode(train_df), device)
+    n = len(train_df)
+    tgt_train = targets(train_df)
     y_eval = eval_df[label_col].astype(str).to_numpy()
 
-    # CatBoost baseline on the SAME split
+    # --- adapter: frozen encoder + frozen LLM + trainable {Φ, ψ, φ} ---
+    dec = MultimodalDecoder(enc, llm, dec_cfg).to(device)
+    dec.assert_frozen()
+    _train_decoder(dec, train_batch, tgt_train, instr, n, decoder_epochs,
+                   batch_size, device, log, "adapter", grad_check=True)
+    adapter_proba = _predict_chunked(dec, vocabs, eval_df, instr, answer_tokens,
+                                     device, batch_size)
+    results = {"adapter": (y_eval, adapter_proba)}
+    trainable = {"adapter": dec.trainable_parameters()}
+
+    # --- optional C2 full fine-tune comparator: frozen encoder + UNFROZEN LLM ---
+    if full_tune_llm is not None:
+        ft = MultimodalDecoder(enc, full_tune_llm, replace(dec_cfg, train_llm=True)).to(device)
+        ft.assert_frozen()                           # encoder frozen; LLM trainable
+        log(f"[C2] full fine-tune comparator: LLM UNFROZEN, "
+            f"{ft.trainable_parameters():,} trainable params (heavy) ...")
+        _train_decoder(ft, train_batch, tgt_train, instr, n, full_tune_epochs,
+                       batch_size, device, log, "full_tune")
+        results["full_tune"] = (y_eval, _predict_chunked(
+            ft, vocabs, eval_df, instr, answer_tokens, device, batch_size))
+        trainable["full_tune"] = ft.trainable_parameters()
+    else:
+        # analytic reference when the full-tune run is skipped
+        trainable["full_tune"] = _LLM_FULL.get(getattr(llm, "name", "mock"), 1_300_000_000)
+
+    # --- CatBoost baseline on the SAME split ---
     log("[C2] CatBoost baseline on the same split ...")
     cb_iters = 50 if (len(train_df) < 2000) else 300
     y_cb, cb_proba, _, _ = catboost_fit_predict(train_df, eval_df, schema,
                                                 iterations=cb_iters, log=log)
+    results["catboost"] = (y_cb, cb_proba)
 
-    results = {"catboost": (y_cb, cb_proba), "adapter": (y_eval, adapter_proba)}
-    trainable = {"adapter": dec.trainable_parameters(),
-                 "full_tune": _LLM_FULL.get(getattr(llm, "name", "mock"), 1_300_000_000)}
     tbl = c2_table(results, label_values, "High", thresholds["fixed_fpr"],
-                   trainable_params={"adapter": trainable["adapter"],
-                                     "full_tune": trainable["full_tune"]},
-                   thresholds=thresholds)
+                   trainable_params=trainable, thresholds=thresholds)
     tbl["trainable_params"] = trainable
     return tbl, dec, instr, answer_tokens
 
@@ -273,6 +295,10 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--eval-rows", type=int, default=4096)
     ap.add_argument("--decoder-epochs", type=int, default=1)   # paper §5.2: 1 epoch
+    ap.add_argument("--full-tune", action="store_true",
+                    help="also train the C2 full fine-tune comparator (UNFROZEN LLM; "
+                         "heavy) to resolve the pr_auc_gap_vs_fulltune threshold")
+    ap.add_argument("--full-tune-epochs", type=int, default=1)
     ap.add_argument("--phi-mode", choices=["prompt", "prefix"], default="prompt",
                     help="prompt = robust soft prompt (default); prefix = per-layer "
                          "(more faithful; needs peft on real HF)")
@@ -315,10 +341,16 @@ def main():
     llm_bundle = build_llm(args, device)
     if not args.smoke:
         llm_bundle[0].name = args.llm
+    # fresh LLM instance for the full-tune comparator (its weights get trained,
+    # so it must not share with the adapter's frozen LLM). Same prompt/tokens.
+    full_tune_llm = build_llm(args, device)[0] if args.full_tune else None
+    if full_tune_llm is not None and not args.smoke:
+        full_tune_llm.name = args.llm
+
     c2, dec, instr, answer_tokens = run_c2(
         schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, c2_thr,
-        c1["verdict"]["high_card_param_ratio"], device, args.decoder_epochs,
-        enc_cfg_batch(enc_cfg), print)
+        device, args.decoder_epochs, enc_cfg_batch(enc_cfg), print,
+        full_tune_llm=full_tune_llm, full_tune_epochs=args.full_tune_epochs)
 
     if args.save_dir:
         from predict import save_model

@@ -239,6 +239,17 @@ python run_gpu.py                        # writes results.json
 `microsoft/phi-1_5` (~3 GB) downloads on first run. Memory is dominated by Phi
 activations on short single-record sequences + the 25M encoder — 24 GB is ample.
 
+To resolve the LAST C2 threshold (`pr_auc_gap_vs_fulltune`, "rivals full-tune"),
+add `--full-tune`:
+```
+python run_gpu.py --save-dir ckpt --full-tune   # also trains the UNFROZEN-LLM comparator
+```
+This trains a second model with the encoder frozen but Phi UNFROZEN (the C2
+full-fine-tune baseline), adds its PR-AUC to the table, and reports the real
+`trainable_param_ratio` (adapter trainable / full-tune trainable ≈ 8.4M/1.3B).
+It is HEAVY (fine-tuning 1.3B params + optimizer state — needs more VRAM, ~1-2h);
+omit it to get only the adapter-vs-CatBoost verdict.
+
 KNOWN φ CAVEAT (validate on first run): the per-layer prefix is passed via
 `past_key_values`; some `transformers` versions ignore it when `use_cache=False`
 in a training forward, so φ may get no gradient. `run_gpu.py` prints a hard
