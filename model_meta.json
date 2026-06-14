@@ -1,0 +1,10 @@
+{
+  "llm_name": "microsoft/phi-1_5",
+  "label_values": [
+    "Low",
+    "Medium",
+    "High"
+  ],
+  "phi_mode": "prompt",
+  "hidden": 512
+}
