@@ -136,17 +136,21 @@ class TabularEncoder(nn.Module):
 
     # -- targets for the reconstructable columns -------------------------- #
     def recon_targets(self, batch: dict) -> dict:
+        # All targets on the encoder's device — the numerical level is built on
+        # CPU from the quantizer, so it MUST be moved or it mismatches the GPU
+        # mask used to index it (a CPU-only smoke test cannot catch this).
+        device = self.cls.device
         t = {}
         for name, *_ in self.recon:
             if name in self.assembler.high_card_cols:
-                t[name] = batch["high_card"][name]
+                t[name] = batch["high_card"][name].to(device)
             elif name in self.assembler.core_cols:
-                t[name] = batch["core"][name]
+                t[name] = batch["core"][name].to(device)
             else:
                 lvl = self.assembler.amt_emb.quantizer.transform(
                     batch["amount"], batch["ccy"]
                 )
-                t[name] = torch.as_tensor(lvl, dtype=torch.long)
+                t[name] = torch.as_tensor(lvl, dtype=torch.long, device=device)
         return t
 
     def sample_column_mask(self, B: int, device) -> torch.Tensor:
@@ -193,7 +197,7 @@ class TabularEncoder(nn.Module):
             if m.any():
                 logits = self.heads[name](out[:, out_pos][m])
                 total = total + F.cross_entropy(
-                    logits, targets[name][m].to(out.device), reduction="sum"
+                    logits, targets[name][m], reduction="sum"   # already on device
                 )
                 count += int(m.sum())
         return total / max(count, 1)
