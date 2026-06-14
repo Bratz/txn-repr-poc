@@ -161,20 +161,16 @@ Always paste the §0 guardrails into the session. Claude Code should leave
 
 - [x] Phase 0 — C1/C2 thresholds committed to config
 - [x] Phase 1 — generator + schema verified
-- [~] Phase 2 — Layers 2+3 BUILT (2a–2e) and unit-tested; encoder `freeze()` ready.
-      C1 param half CONFIRMED (embedding-table ratio ~0.057 << 0.55). C1 accuracy
-      half (≤1pp recon give-up) PENDING the full 25M/3-epoch run — deferred to GPU
-      (CPU est. ~12h for `--compare`). Run command in §6 below.
-- [~] Phase 3 — Layer 4 decoder BUILT and unit-tested (Eq. 5 interleave, Eq. 6 NLL,
-      Φ/ψ/φ + [R1] sentinel; encoder f AND LLM frozen, `assert_frozen()`). C2 param
-      half RECORDED: trio ≈8.4M vs Phi-1.5 1.3B → ratio 0.0065 << 0.10. LLM is
-      pluggable (MockLLM tested on CPU; HFCausalLM for Phi). Well-formed predictions
-      + the C2 PR-AUC half need the GPU instruction-tuning run (see §6).
-- [~] Phase 4 — imbalance-aware metrics (PR-AUC, recall@FPR, F1; accuracy alongside)
-      + CatBoost baseline BUILT and unit-tested; C2 table harness wired. CatBoost
-      run on full 200K: PR-AUC 0.635, recall@1%FPR 0.724, acc 0.873 (the 0.87/0.63
-      split is exactly why accuracy is misleading — departure #3). adapter /
-      full_tune PR-AUC columns fill in from the GPU decoder run (handoff §6).
+- [x] Phase 2 — Layers 2+3 built/tested; encoder frozen. C1 RESOLVED on the full
+      1M-row / ~120K-vocab H200 run: CONFIRMED (param ratio 0.058 <= 0.55; recon gap
+      -0.01pp <= 1.0). See RESULTS.md.
+- [x] Phase 3 — decoder built/tested; encoder f AND LLM frozen (assert_frozen);
+      well-formed predictions via predict_proba; instruction-tuned vs frozen Phi-1.5
+      (fp32) on the GPU run.
+- [x] Phase 4 — imbalance-aware metrics + CatBoost baseline. C2 RESOLVED: param half
+      CONFIRMED (trainable ratio 0.0059 <= 0.10); beat-CatBoost half NOT met (adapter
+      PR-AUC 0.210 vs CatBoost 0.655, -44.5pp). Honest read in RESULTS.md — the
+      synthetic rule-based label favors GBDT; not retuned per §0.
 
 ---
 
