@@ -15,14 +15,15 @@ weights live on the **Hugging Face Hub**; this repo carries only the metadata
 
 ## Weights location
 
-Hugging Face: `https://huggingface.co/<your-hf-username>/txn-repr-poc-model`
-(update this line with your actual repo id after upload).
+Hugging Face (**private**): `https://huggingface.co/Subratob/txn-repr-poc-model`
+Downloading requires a Hugging Face token with read access to the repo.
 
 ## Use it
 
 ```bash
 pip install huggingface_hub
-hf download <your-hf-username>/txn-repr-poc-model --local-dir ckpt   # gets model.pt + meta.json
+hf auth login --token <HF_TOKEN>          # private repo → authenticate first
+hf download Subratob/txn-repr-poc-model --local-dir ckpt   # gets model.pt + meta.json
 python predict.py --model-dir ckpt --input new_rows.parquet --out scored.csv
 ```
 `new_rows.parquet` must hold the projected `column_schema.json` columns. Output
