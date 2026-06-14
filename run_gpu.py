@@ -211,7 +211,7 @@ def run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, thresholds,
                                      "full_tune": trainable["full_tune"]},
                    thresholds=thresholds)
     tbl["trainable_params"] = trainable
-    return tbl
+    return tbl, dec, instr, answer_tokens
 
 
 _LLM_FULL = {"phi-1_5": 1_300_000_000, "microsoft/phi-1_5": 1_300_000_000}
@@ -278,6 +278,8 @@ def main():
                          "(more faithful; needs peft on real HF)")
     ap.add_argument("--smoke-hidden", type=int, default=32)
     ap.add_argument("--out", default=str(ROOT / "results.json"))
+    ap.add_argument("--save-dir", default=None,
+                    help="persist the trained model here for predict.py")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -313,9 +315,20 @@ def main():
     llm_bundle = build_llm(args, device)
     if not args.smoke:
         llm_bundle[0].name = args.llm
-    c2 = run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, c2_thr,
-                c1["verdict"]["high_card_param_ratio"], device, args.decoder_epochs,
-                enc_cfg_batch(enc_cfg), print)
+    c2, dec, instr, answer_tokens = run_c2(
+        schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, c2_thr,
+        c1["verdict"]["high_card_param_ratio"], device, args.decoder_epochs,
+        enc_cfg_batch(enc_cfg), print)
+
+    if args.save_dir:
+        from predict import save_model
+        save_model(
+            args.save_dir, enc_cfg=enc_cfg, dec_cfg=dec_cfg, vocabs=frozen["vocabs"],
+            quantizer=frozen["assembler"].amt_emb.quantizer, encoder=frozen["encoder"],
+            decoder=dec, llm_name=("mock" if args.smoke else args.llm),
+            label_values=schema["label_values"], instruction_ids=instr,
+            answer_token_ids=answer_tokens, schema=schema)
+        print(f"saved model -> {args.save_dir}")
 
     results = {"mode": "smoke" if args.smoke else "full", "device": device,
                "n_rows": int(len(df)), "C1": c1["verdict"], "C2": c2["verdict"],

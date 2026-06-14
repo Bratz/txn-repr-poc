@@ -117,7 +117,7 @@ class ColumnAssembler(nn.Module):
         schema: dict,
         vocabs: ColumnVocabs,
         quantizer: AdaptiveQuantizer,
-        party_store: PartyStore,
+        party_store: PartyStore | None,
         embedding_dim: int = 128,
         partition_kwargs: dict | None = None,
         high_card_embedder: str = "partitioned",
@@ -167,20 +167,26 @@ class ColumnAssembler(nn.Module):
         self.amt_emb = make_quantizer_embedder(quantizer, D)
 
         # §3.2 party summaries: FROZEN store lookups per structured role, indexed
-        # by that role's account-id column int vocab.
+        # by that role's account-id column int vocab. `party_store=None` builds
+        # zero tables of the right shape (C_g=1 → summary dim D) for INFERENCE,
+        # where the real weights arrive via load_state_dict from a checkpoint.
         self.party_roles = party_roles_from_schema(schema)
-        if party_store.dim != D:
+        if party_store is not None and party_store.dim != D:
             raise ValueError(
                 f"party_store.dim={party_store.dim} != embedding_dim={D}; rebuild "
                 f"the store with C_g*D == embedding_dim"
             )
-        self.party_emb = nn.ModuleDict({
-            prefix: nn.Embedding.from_pretrained(
-                build_party_matrix(party_store, vocabs.high_card[spec["key"]]),
-                freeze=True,
-            )
-            for prefix, spec in self.party_roles.items()
-        })
+        self.party_emb = nn.ModuleDict()
+        for prefix, spec in self.party_roles.items():
+            if party_store is None:
+                emb = nn.Embedding(vocabs.hc_size(spec["key"]), D)
+                emb.weight.requires_grad_(False)
+            else:
+                emb = nn.Embedding.from_pretrained(
+                    build_party_matrix(party_store, vocabs.high_card[spec["key"]]),
+                    freeze=True,
+                )
+            self.party_emb[prefix] = emb
 
         # Token order (Eq. 4): per-column embeddings, meta block → party summaries.
         self.token_names = (
