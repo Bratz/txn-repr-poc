@@ -1,0 +1,41 @@
+{
+  "mode": "full",
+  "device": "cuda",
+  "n_rows": 1000000,
+  "C1": {
+    "high_card_param_ratio": 0.05810363468949111,
+    "mean_top1_recon_gap_pp": -0.01220703125,
+    "param_efficiency_pass": true,
+    "accuracy_giveup_pass": true
+  },
+  "C2": {
+    "pr_auc_gain_vs_catboost_pp": -44.50965341859746,
+    "beats_catboost": false,
+    "trainable_param_ratio": 0.005875790769230769,
+    "param_efficient": true
+  },
+  "C2_trainable_params": {
+    "adapter": 7638528,
+    "full_tune": 1300000000
+  },
+  "C2_per_model": {
+    "catboost": {
+      "positive_class": "High",
+      "prevalence": 0.01806640625,
+      "pr_auc": 0.6553864481825721,
+      "recall_at_fpr_0.01": 0.7837837837837838,
+      "operating_threshold": 0.9453805464060239,
+      "f1_at_operating_threshold": 0.6744186046511628,
+      "accuracy_multiclass": 0.87109375
+    },
+    "adapter": {
+      "positive_class": "High",
+      "prevalence": 0.01806640625,
+      "pr_auc": 0.21028991399659747,
+      "recall_at_fpr_0.01": 0.24324324324324326,
+      "operating_threshold": 0.12835179269313812,
+      "f1_at_operating_threshold": 0.2926829268292683,
+      "accuracy_multiclass": 0.84130859375
+    }
+  }
+}
