@@ -88,6 +88,40 @@ def evaluate(y_true, proba, label_values, positive_class: str = "High",
 
 
 # --------------------------------------------------------------------------- #
+# Balanced multiclass tasks (geography, expense) — accuracy + macro-F1
+# --------------------------------------------------------------------------- #
+# The paper's geography/expense tagging tasks are roughly class-balanced, so
+# accuracy is meaningful here (unlike the imbalanced risk label). Macro-F1 is
+# reported alongside so a degenerate majority-class predictor is still exposed.
+
+def evaluate_multiclass(y_true, proba, label_values) -> dict:
+    from sklearn.metrics import f1_score
+    y_true, proba = _as_arrays(y_true, proba)
+    pred = np.asarray(label_values)[proba.argmax(axis=1)]
+    return {
+        "accuracy": float((pred == y_true).mean()),
+        "macro_f1": float(f1_score(y_true, pred, labels=label_values,
+                                   average="macro", zero_division=0)),
+        "n_classes": len(label_values),
+    }
+
+
+def evaluate_task(task: dict, y_true, proba, fixed_fpr: float = 0.01) -> dict:
+    """Route a task to the right metric bundle by its `metric` field.
+
+    imbalance / binary → PR-AUC, recall@FPR, F1 (binary positive class).
+    multiclass         → accuracy + macro-F1 (balanced tasks).
+    """
+    metric = task.get("metric", "imbalance")
+    label_values = task["label_values"]
+    if metric == "multiclass":
+        return {"metric": metric, **evaluate_multiclass(y_true, proba, label_values)}
+    positive = task.get("positive_class", label_values[-1])
+    return {"metric": metric,
+            **evaluate(y_true, proba, label_values, positive, fixed_fpr)}
+
+
+# --------------------------------------------------------------------------- #
 # C2 comparison table
 # --------------------------------------------------------------------------- #
 

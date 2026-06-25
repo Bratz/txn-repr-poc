@@ -3,6 +3,14 @@
 Outcome of the end-to-end run (`run_gpu.py`). Both falsifiable claims resolved
 with numbers against the `configs/default.yaml` thresholds.
 
+> **Scope note (task suite).** The numbers below are from the original
+> **risk-only** decoder run. The build now covers the paper's full §5 task suite —
+> risk, geography, expense (single-record) and recurrence (multi-record, Eq. 5) —
+> trained jointly. Per-task metrics (geography/expense accuracy, recurrence
+> PR-AUC) are emitted under `C2_per_task` in `results.json`; the multi-task GPU
+> numbers will be recorded here after the next full run. C1 and the C2 risk
+> headline are unchanged.
+
 ## Run configuration
 
 | | |

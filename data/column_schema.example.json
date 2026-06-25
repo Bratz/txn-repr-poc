@@ -33,19 +33,89 @@
     "Medium",
     "High"
   ],
-  "n_rows": 200000,
-  "n_accounts": 24401,
+  "tasks": [
+    {
+      "name": "risk",
+      "label_column": "risk_label",
+      "label_values": [
+        "Low",
+        "Medium",
+        "High"
+      ],
+      "metric": "imbalance",
+      "positive_class": "High",
+      "records": "single"
+    },
+    {
+      "name": "geography",
+      "label_column": "geo_label",
+      "label_values": [
+        "US",
+        "Americas",
+        "EMEA",
+        "Asia",
+        "International"
+      ],
+      "metric": "multiclass",
+      "records": "single"
+    },
+    {
+      "name": "expense",
+      "label_column": "expense_label",
+      "label_values": [
+        "Capital",
+        "Operational",
+        "Technology",
+        "Other"
+      ],
+      "metric": "multiclass",
+      "records": "single"
+    },
+    {
+      "name": "recurrence",
+      "label_column": "recurrence_label",
+      "label_values": [
+        "No",
+        "Yes"
+      ],
+      "metric": "binary",
+      "positive_class": "Yes",
+      "records": "multi",
+      "group_column": "group_id"
+    }
+  ],
+  "group_column": "group_id",
+  "n_rows": 500,
+  "n_accounts": 319,
   "vocab": {
-    "DbtrAcct_Id": 12657,
-    "CdtrAcct_Id": 22951,
-    "UltmtDbtr_Id": 3314,
-    "UltmtCdtr_Id": 3940,
-    "combined_account_id_vocab": 23665,
-    "combined_parent_id_vocab": 3968
+    "DbtrAcct_Id": 36,
+    "CdtrAcct_Id": 130,
+    "UltmtDbtr_Id": 25,
+    "UltmtCdtr_Id": 44,
+    "combined_account_id_vocab": 151,
+    "combined_parent_id_vocab": 48
   },
-  "risk_distribution": {
-    "Low": 125872,
-    "Medium": 70576,
-    "High": 3552
+  "label_distributions": {
+    "risk_label": {
+      "Low": 331,
+      "Medium": 164,
+      "High": 5
+    },
+    "geo_label": {
+      "International": 339,
+      "Asia": 69,
+      "EMEA": 60,
+      "Americas": 32
+    },
+    "expense_label": {
+      "Operational": 187,
+      "Other": 158,
+      "Capital": 91,
+      "Technology": 64
+    },
+    "recurrence_label": {
+      "No": 431,
+      "Yes": 69
+    }
   }
 }

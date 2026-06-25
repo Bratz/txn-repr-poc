@@ -123,43 +123,126 @@ def run_c1(df, schema, enc_cfg, train_df, eval_df, thresholds, device, log):
 # C2 — decoder instruction tuning vs baselines
 # --------------------------------------------------------------------------- #
 
+_LETTERS = "ABCDEFGH"
+_LLM_FULL = {"phi-1_5": 1_300_000_000, "microsoft/phi-1_5": 1_300_000_000}
+
+
 def build_llm(args, device):
-    """Return (llm, instruction_ids_1d, answer_token_ids, hidden)."""
+    """Return the (frozen) LLM only — task prompts are built separately."""
     if args.smoke:
         from decoder.multimodal_decoder import MockLLM
         llm = MockLLM(vocab_size=64, hidden=args.smoke_hidden, num_layers=2, num_heads=4)
-        instr = torch.randint(0, 64, (4,))
-        answers = [0, 1, 2]                         # one token per risk class
-        return llm.to(device), instr.to(device), answers
+        return llm.to(device)
     from decoder.multimodal_decoder import HFCausalLM
-    llm = HFCausalLM(args.llm).to(device)
-    tok = llm.tokenizer
-    # single-token, distinct answers: letters mapped to the 3 risk classes.
-    prompt = ("Classify the transaction's risk. Answer with a single letter: "
-              "A for Low, B for Medium, C for High. Answer:")
-    instr = torch.tensor(tok(prompt, add_special_tokens=False)["input_ids"], device=device)
-    answers = [tok(f" {ltr}", add_special_tokens=False)["input_ids"][0] for ltr in "ABC"]
-    if len(set(answers)) != 3:
-        raise RuntimeError(f"answer tokens not distinct: {answers}; pick other letters")
-    return llm, instr, answers
+    return HFCausalLM(args.llm).to(device)
 
 
-def _train_decoder(dec, train_batch, tgt_train, instr, n, epochs, batch_size,
-                   device, log, label, grad_check=False):
-    """Instruction-tuning loop shared by the adapter and the full-tune comparator."""
+def build_task_specs(schema, llm, smoke, device):
+    """Augment each schema task with task_id, instruction ids, and answer tokens.
+
+    Tasks are read from the schema manifest (§0.4 — never hard-coded). Each label
+    maps to one distinct single LLM-vocab token (a letter) so predict_proba scores
+    a well-formed label distribution.
+    """
+    specs = []
+    for i, t in enumerate(schema["tasks"]):
+        lv = t["label_values"]
+        if len(lv) > len(_LETTERS):
+            raise ValueError(f"task {t['name']} has too many labels for letter answers")
+        if smoke:
+            instr = torch.randint(0, llm.vocab_size, (4,), device=device)
+            answers = list(range(len(lv)))           # distinct token ids 0..L-1
+        else:
+            tok = llm.tokenizer
+            letters = _LETTERS[:len(lv)]
+            opts = ", ".join(f"{ltr} for {v}" for ltr, v in zip(letters, lv))
+            unit = "transactions" if t.get("records") == "multi" else "transaction"
+            prompt = (f"Task: {t['name']}. Classify the {unit}. "
+                      f"Answer with a single letter: {opts}. Answer:")
+            instr = torch.tensor(tok(prompt, add_special_tokens=False)["input_ids"],
+                                 device=device)
+            answers = [tok(f" {ltr}", add_special_tokens=False)["input_ids"][0]
+                       for ltr in letters]
+            if len(set(answers)) != len(lv):
+                raise RuntimeError(f"answer tokens not distinct for {t['name']}: {answers}")
+        specs.append({**t, "task_id": i, "instr": instr, "answers": answers,
+                      "label_index": {v: j for j, v in enumerate(lv)}})
+    return specs
+
+
+# -- per-task training-example construction --------------------------------- #
+
+def _single_examples(tdf, task):
+    """Single-record task: every row is an example. Returns (positions, targets)."""
+    y = tdf[task["label_column"]].astype(str).map(task["label_index"]).to_numpy()
+    tgt = np.array([task["answers"][int(j)] for j in y], dtype=np.int64)
+    return np.arange(len(tdf)), tgt
+
+
+def _recurrence_groups(tdf, task, R):
+    """Multi-record task: each (debtor,creditor) group with ≥R txns → R records
+    (first R by settlement date). Returns (groups, label_strings) where each group
+    is an array of R row-positions into `tdf`."""
+    gcol, lcol = task["group_column"], task["label_column"]
+    groups, labels = [], []
+    for _, sub in tdf.groupby(gcol):
+        sub = sub.sort_values("IntrBkSttlmDt")
+        pos = sub.index.to_numpy()
+        if len(pos) < R:
+            continue
+        groups.append(pos[:R])
+        labels.append(str(sub[lcol].iloc[0]))        # constant within a group
+    return groups, labels
+
+
+def _multi_records(full, groups, device):
+    """Assemble R slot-batches from a list of same-length groups (Eq. 5 records)."""
+    R = len(groups[0])
+    return [_index_batch(full, torch.tensor([g[j] for g in groups], device=device))
+            for j in range(R)]
+
+
+def train_multitask(dec, specs, tdf, full, R, epochs, batch_size, device, log,
+                    label="adapter", grad_check=False):
+    """Joint instruction tuning across all tasks; batches interleaved per epoch."""
     opt = torch.optim.Adam([p for p in dec.parameters() if p.requires_grad], lr=1e-4)
-    log(f"[C2] {label}: train {dec.trainable_parameters():,} params, {epochs} epoch(s) ...")
+    log(f"[C2] {label}: train {dec.trainable_parameters():,} params over "
+        f"{len(specs)} tasks, {epochs} epoch(s) ...")
+
+    prepared = []
+    for task in specs:
+        if task.get("records") == "multi":
+            groups, labs = _recurrence_groups(tdf, task, R)
+            tgt = np.array([task["answers"][task["label_index"][s]] for s in labs],
+                           dtype=np.int64)
+            prepared.append(("multi", task, groups, tgt))
+            log(f"  task {task['name']}: {len(groups):,} multi-record examples (R={R})")
+        else:
+            pos, tgt = _single_examples(tdf, task)
+            prepared.append(("single", task, pos, tgt))
+            log(f"  task {task['name']}: {len(pos):,} single-record examples")
+
     dec.train()
     checked = not grad_check
     for ep in range(epochs):
-        perm = torch.randperm(n)
-        tot, nb = 0.0, 0
-        for s in range(0, n, batch_size):
-            sl = perm[s:s + batch_size]
-            b = _index_batch(train_batch, sl)
-            B = len(sl)
-            loss = dec(b, torch.zeros(B, dtype=torch.long, device=device),
-                       instr.unsqueeze(0).expand(B, -1), tgt_train[sl])
+        jobs = []                                    # (kind, task, data, tgt, idx-slice)
+        for kind, task, data, tgt in prepared:
+            n = len(data)
+            perm = torch.randperm(n)
+            for s in range(0, n, batch_size):
+                jobs.append((kind, task, data, tgt, perm[s:s + batch_size]))
+        for j in torch.randperm(len(jobs)).tolist():  # interleave tasks
+            kind, task, data, tgt, sl = jobs[j]
+            sl_np = sl.numpy()
+            B = len(sl_np)
+            tids = torch.full((B,), task["task_id"], dtype=torch.long, device=device)
+            instr = task["instr"].unsqueeze(0).expand(B, -1)
+            tgt_b = torch.tensor([[tgt[k]] for k in sl_np], device=device)
+            if kind == "single":
+                records = _index_batch(full, sl.to(device))
+            else:
+                records = _multi_records(full, [data[k] for k in sl_np], device)
+            loss = dec(records, tids, instr, tgt_b)
             opt.zero_grad(); loss.backward()
             if not checked:                          # φ grad-check (see module header)
                 g = dec.phi_param().grad
@@ -170,73 +253,120 @@ def _train_decoder(dec, train_batch, tgt_train, instr, n, epochs, batch_size,
                     log(f"  phi grad-check OK (mode={dec.phi_mode}, "
                         f"|grad|={float(g.abs().sum()):.3e})")
                 checked = True
-            opt.step(); tot += loss.item(); nb += 1
-        log(f"  {label} epoch {ep+1}/{epochs}  loss {tot/nb:.4f}")
+            opt.step()
     return dec
 
 
-def run_c2(schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, thresholds,
-           device, decoder_epochs, batch_size, log,
+@torch.no_grad()
+def predict_task(dec, task, edf, full, R, device, batch_size):
+    """Adapter probabilities + true labels for one task on the eval frame."""
+    if task.get("records") == "multi":
+        groups, labels = _recurrence_groups(edf, task, R)
+        y_true = np.array(labels)
+        parts = []
+        for s in range(0, len(groups), batch_size):
+            gsel = groups[s:s + batch_size]
+            B = len(gsel)
+            tids = torch.full((B,), task["task_id"], dtype=torch.long, device=device)
+            p = dec.predict_proba(_multi_records(full, gsel, device), tids,
+                                  task["instr"].unsqueeze(0).expand(B, -1), task["answers"])
+            parts.append(p.cpu().numpy())
+        return y_true, (np.concatenate(parts, axis=0) if parts
+                        else np.zeros((0, len(task["label_values"]))))
+    y_true = edf[task["label_column"]].astype(str).to_numpy()
+    n = len(edf)
+    parts = []
+    for s in range(0, n, batch_size):
+        idx = torch.arange(s, min(s + batch_size, n))
+        B = len(idx)
+        tids = torch.full((B,), task["task_id"], dtype=torch.long, device=device)
+        p = dec.predict_proba(_index_batch(full, idx.to(device)), tids,
+                              task["instr"].unsqueeze(0).expand(B, -1), task["answers"])
+        parts.append(p.cpu().numpy())
+    return y_true, np.concatenate(parts, axis=0)
+
+
+def run_c2(schema, frozen, llm, specs, train_df, eval_df, dec_cfg, thresholds,
+           device, decoder_epochs, batch_size, R, log,
            full_tune_llm=None, full_tune_epochs=1):
     from dataclasses import replace
 
     from decoder.multimodal_decoder import MultimodalDecoder
     from eval.baselines import catboost_fit_predict
-    from eval.metrics import c2_table
+    from eval.metrics import c2_table, evaluate_task
 
     enc, vocabs = frozen["encoder"], frozen["vocabs"]
-    llm, instr, answer_tokens = llm_bundle
-    label_values = schema["label_values"]
-    label_col = schema["label_column"]
+    tdf = train_df.reset_index(drop=True)
+    edf = eval_df.reset_index(drop=True)
+    full_tr = _to_device(vocabs.encode(tdf), device)
+    full_ev = _to_device(vocabs.encode(edf), device)
 
-    def targets(frame):
-        idx = frame[label_col].map({v: i for i, v in enumerate(label_values)}).to_numpy()
-        return torch.tensor([[answer_tokens[i]] for i in idx], device=device)
-
-    train_batch = _to_device(vocabs.encode(train_df), device)
-    n = len(train_df)
-    tgt_train = targets(train_df)
-    y_eval = eval_df[label_col].astype(str).to_numpy()
-
-    # --- adapter: frozen encoder + frozen LLM + trainable {Φ, ψ, φ} ---
+    # --- adapter: frozen encoder + frozen LLM + trainable {Φ, ψ, φ}, all tasks ---
     dec = MultimodalDecoder(enc, llm, dec_cfg).to(device)
     dec.assert_frozen()
-    _train_decoder(dec, train_batch, tgt_train, instr, n, decoder_epochs,
-                   batch_size, device, log, "adapter", grad_check=True)
-    adapter_proba = _predict_chunked(dec, vocabs, eval_df, instr, answer_tokens,
-                                     device, batch_size)
-    results = {"adapter": (y_eval, adapter_proba)}
+    train_multitask(dec, specs, tdf, full_tr, R, decoder_epochs, batch_size,
+                    device, log, "adapter", grad_check=True)
     trainable = {"adapter": dec.trainable_parameters()}
 
-    # --- optional C2 full fine-tune comparator: frozen encoder + UNFROZEN LLM ---
+    # --- per-task eval: adapter (all tasks) + CatBoost (single-record tasks) ---
+    cb_iters = 50 if (len(tdf) < 2000) else 300
+    per_task = {}
+    risk_results = {}                                # for the headline C2 (risk) table
+    def _safe_eval(task, y_true, proba):
+        # Guard tiny/degenerate eval folds (e.g. the smoke split) so the chain
+        # still completes; the full run has ample examples per task.
+        if len(y_true) < 2 or len(set(y_true.tolist())) < 2:
+            return {"metric": task.get("metric"), "note": "insufficient eval examples",
+                    "n": int(len(y_true))}
+        return evaluate_task(task, y_true, proba, thresholds["fixed_fpr"])
+
+    for task in specs:
+        y_true, ad_proba = predict_task(dec, task, edf, full_ev, R, device, batch_size)
+        entry = {"adapter": _safe_eval(task, y_true, ad_proba)}
+        # PAPER: §5.3. "The Recurrence task, which involves passing multiple
+        # transactions, is not suitable for non-sequential classifiers and is
+        # therefore excluded from the CatBoost evaluation for a fair comparison."
+        # So CatBoost scores only the single-record tasks; recurrence is LLM-only.
+        if task.get("records") != "multi":
+            tschema = dict(schema, label_column=task["label_column"],
+                           label_values=task["label_values"])
+            y_cb, cb_proba, _, _ = catboost_fit_predict(tdf, edf, tschema,
+                                                        iterations=cb_iters, log=log)
+            entry["catboost"] = _safe_eval(task, y_cb, cb_proba)
+            if task["name"] == "risk":
+                risk_results = {"adapter": (y_true, ad_proba), "catboost": (y_cb, cb_proba)}
+        per_task[task["name"]] = entry
+        log(f"  [{task['name']}] adapter: {_fmt_metric(entry['adapter'])}")
+
+    # --- optional C2 full fine-tune comparator on the RISK task (headline claim) ---
+    risk_spec = next(t for t in specs if t["name"] == "risk")
     if full_tune_llm is not None:
         ft = MultimodalDecoder(enc, full_tune_llm, replace(dec_cfg, train_llm=True)).to(device)
         ft.assert_frozen()                           # encoder frozen; LLM trainable
-        log(f"[C2] full fine-tune comparator: LLM UNFROZEN, "
+        log(f"[C2] full fine-tune comparator (risk): LLM UNFROZEN, "
             f"{ft.trainable_parameters():,} trainable params (heavy) ...")
-        _train_decoder(ft, train_batch, tgt_train, instr, n, full_tune_epochs,
-                       batch_size, device, log, "full_tune")
-        results["full_tune"] = (y_eval, _predict_chunked(
-            ft, vocabs, eval_df, instr, answer_tokens, device, batch_size))
+        train_multitask(ft, [risk_spec], tdf, full_tr, R, full_tune_epochs,
+                        batch_size, device, log, "full_tune")
+        y_ft, ft_proba = predict_task(ft, risk_spec, edf, full_ev, R, device, batch_size)
+        risk_results["full_tune"] = (y_ft, ft_proba)
         trainable["full_tune"] = ft.trainable_parameters()
     else:
-        # analytic reference when the full-tune run is skipped
         trainable["full_tune"] = _LLM_FULL.get(getattr(llm, "name", "mock"), 1_300_000_000)
 
-    # --- CatBoost baseline on the SAME split ---
-    log("[C2] CatBoost baseline on the same split ...")
-    cb_iters = 50 if (len(train_df) < 2000) else 300
-    y_cb, cb_proba, _, _ = catboost_fit_predict(train_df, eval_df, schema,
-                                                iterations=cb_iters, log=log)
-    results["catboost"] = (y_cb, cb_proba)
-
-    tbl = c2_table(results, label_values, "High", thresholds["fixed_fpr"],
-                   trainable_params=trainable, thresholds=thresholds)
+    tbl = c2_table(risk_results, risk_spec["label_values"], "High",
+                   thresholds["fixed_fpr"], trainable_params=trainable,
+                   thresholds=thresholds)
     tbl["trainable_params"] = trainable
-    return tbl, dec, instr, answer_tokens
+    tbl["per_task"] = per_task
+    return tbl, dec, specs
 
 
-_LLM_FULL = {"phi-1_5": 1_300_000_000, "microsoft/phi-1_5": 1_300_000_000}
+def _fmt_metric(m):
+    if "note" in m:
+        return m["note"]
+    if m.get("metric") == "multiclass":
+        return f"acc={m['accuracy']:.3f} macroF1={m['macro_f1']:.3f}"
+    return f"PR-AUC={m['pr_auc']:.3f}"
 
 
 # --------------------------------------------------------------------------- #
@@ -258,21 +388,6 @@ def _index_batch(batch, idx):
         "core": {c: t[idx] for c, t in batch["core"].items()},
         "amount": batch["amount"][idx_cpu], "ccy": batch["ccy"][idx_cpu],
     }
-
-
-@torch.no_grad()
-def _predict_chunked(dec, vocabs, eval_df, instr, answer_tokens, device, batch_size):
-    full = _to_device(vocabs.encode(eval_df), device)
-    n = len(eval_df)
-    parts = []
-    for s in range(0, n, batch_size):
-        idx = torch.arange(s, min(s + batch_size, n))
-        b = _index_batch(full, idx)
-        B = len(idx)
-        p = dec.predict_proba(b, torch.zeros(B, dtype=torch.long, device=device),
-                              instr.unsqueeze(0).expand(B, -1), answer_tokens)
-        parts.append(p.cpu().numpy())
-    return np.concatenate(parts, axis=0)
 
 
 def enc_cfg_batch(cfg):
@@ -303,6 +418,8 @@ def main():
                     help="prompt = robust soft prompt (default); prefix = per-layer "
                          "(more faithful; needs peft on real HF)")
     ap.add_argument("--smoke-hidden", type=int, default=32)
+    ap.add_argument("--recur-records", type=int, default=3,
+                    help="R: records per multi-record (recurrence) example, Eq. 5")
     ap.add_argument("--out", default=str(ROOT / "results.json"))
     ap.add_argument("--save-dir", default=None,
                     help="persist the trained model here for predict.py")
@@ -324,49 +441,57 @@ def main():
     from encoder.tabular_encoder import EncoderConfig
     from decoder.multimodal_decoder import DecoderConfig
 
+    df, schema = load_data_and_schema(args)
+    n_tasks = len(schema["tasks"])
+    R = args.recur_records
     if args.smoke:
         enc_cfg = EncoderConfig(hidden=args.smoke_hidden, layers=2, heads=2,
                                 ff_mult=2, dropout=0.0, epochs=1)
-        dec_cfg = DecoderConfig(n_tasks=1, adapter_heads=4, prefix_len=4,
-                                phi_mode=args.phi_mode)
+        dec_cfg = DecoderConfig(n_tasks=n_tasks, max_records=R, adapter_heads=4,
+                                prefix_len=4, phi_mode=args.phi_mode)
     else:
         enc_cfg = EncoderConfig()                  # pinned 25M / 3 epochs
-        dec_cfg = DecoderConfig(n_tasks=1, phi_mode=args.phi_mode)
+        dec_cfg = DecoderConfig(n_tasks=n_tasks, max_records=R, phi_mode=args.phi_mode)
 
-    df, schema = load_data_and_schema(args)
     train_df, eval_df = split(df, args.eval_rows, schema["label_column"])
     torch.manual_seed(0)
 
     c1, frozen = run_c1(df, schema, enc_cfg, train_df, eval_df, c1_thr, device, print)
-    llm_bundle = build_llm(args, device)
+
+    llm = build_llm(args, device)
     if not args.smoke:
-        llm_bundle[0].name = args.llm
+        llm.name = args.llm
+    specs = build_task_specs(schema, llm, args.smoke, device)
+    print(f"[C2] tasks: {[t['name'] for t in specs]}  (n_tasks={n_tasks}, R={R})")
     # fresh LLM instance for the full-tune comparator (its weights get trained,
-    # so it must not share with the adapter's frozen LLM). Same prompt/tokens.
-    full_tune_llm = build_llm(args, device)[0] if args.full_tune else None
+    # so it must not share with the adapter's frozen LLM).
+    full_tune_llm = build_llm(args, device) if args.full_tune else None
     if full_tune_llm is not None and not args.smoke:
         full_tune_llm.name = args.llm
 
-    c2, dec, instr, answer_tokens = run_c2(
-        schema, frozen, llm_bundle, train_df, eval_df, dec_cfg, c2_thr,
-        device, args.decoder_epochs, enc_cfg_batch(enc_cfg), print,
+    c2, dec, specs = run_c2(
+        schema, frozen, llm, specs, train_df, eval_df, dec_cfg, c2_thr,
+        device, args.decoder_epochs, enc_cfg_batch(enc_cfg), R, print,
         full_tune_llm=full_tune_llm, full_tune_epochs=args.full_tune_epochs)
 
     if args.save_dir:
+        # Persist the full §5 task suite; predict.py scores any task by name
+        # (risk is the default). Legacy fields below mirror the risk task.
         from predict import save_model
+        risk = next(t for t in specs if t["name"] == "risk")
         save_model(
             args.save_dir, enc_cfg=enc_cfg, dec_cfg=dec_cfg, vocabs=frozen["vocabs"],
             quantizer=frozen["assembler"].amt_emb.quantizer, encoder=frozen["encoder"],
             decoder=dec, llm_name=("mock" if args.smoke else args.llm),
-            label_values=schema["label_values"], instruction_ids=instr,
-            answer_token_ids=answer_tokens, schema=schema)
-        print(f"saved model -> {args.save_dir}")
+            label_values=risk["label_values"], instruction_ids=risk["instr"],
+            answer_token_ids=risk["answers"], schema=schema, tasks=specs)
+        print(f"saved model ({len(specs)} tasks) -> {args.save_dir}")
 
     results = {"mode": "smoke" if args.smoke else "full", "device": device,
-               "n_rows": int(len(df)), "C1": c1["verdict"], "C2": c2["verdict"],
+               "n_rows": int(len(df)), "tasks": [t["name"] for t in specs],
+               "C1": c1["verdict"], "C2_risk": c2["verdict"],
                "C2_trainable_params": c2["trainable_params"],
-               "C2_per_model": {k: {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str))}
-                                for k, v in c2["per_model"].items()}}
+               "C2_per_task": c2["per_task"]}
     results = _sanitize(results)
     Path(args.out).write_text(json.dumps(results, indent=2, default=float, allow_nan=False))
     print("\n=== RESULTS ===")

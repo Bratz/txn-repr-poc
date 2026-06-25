@@ -12,11 +12,21 @@ Scope of this module (v1, no extensions beyond the paper):
   - Layer 1 projection of each transaction into a pacs.008-typed row, with the
     four-bucket column typing used by the encoder (core / high-cardinality
     categorical / meta / numerical).
-  - Risk label in the paper's risk-tag slot (Low / Medium / High).
+  - Templated tagging labels for the paper's FOUR downstream tasks (§5):
+      * risk        Low / Medium / High            (single-record)
+      * geography   US / Americas / EMEA / Asia / International   (single-record)
+      * expense     Capital / Operational / Technology / Other    (single-record)
+      * recurrence  No / Yes                        (MULTI-record, Eq. 5)
+    Each label is a transparent rule over generated features (like assign_risk) —
+    template-based instructions/responses, not an elaborate fraud engine. The geo
+    and expense rules and the recurrence definition are documented grounded
+    choices (see each assign_* / the recurring-series generation below).
 
-Deliberately NOT included (walked back as extensions):
+Deliberately NOT included (walked back as extensions — distinct from the paper's
+own recurrence task above):
   - data-completeness feature vector
-  - multi-record structuring / layering chain task
+  - multi-record STRUCTURING / LAYERING chain task (an AML extension beyond the
+    paper; not to be confused with §5 recurrence, which IS a paper task)
   - held-out-typology generalization split
 These belong to v2, not the grounded prototype.
 
@@ -50,9 +60,13 @@ INDUSTRIES = {
     "Technology": ["Software", "Hardware", "Semiconductors"],
 }
 
-# Country -> (currency, geographic region). Region/currency drive the risk rule.
+# Country -> (currency, geographic region). Region/currency drive the risk and
+# geography rules. CA/BR populate a non-US Americas so the geography task's
+# "Americas" span is non-degenerate (US alone would make it unobservable).
 COUNTRIES = {
     "US": ("USD", "Americas"),
+    "CA": ("CAD", "Americas"),
+    "BR": ("BRL", "Americas"),
     "GB": ("GBP", "EMEA"),
     "FR": ("EUR", "EMEA"),
     "DE": ("EUR", "EMEA"),
@@ -107,6 +121,14 @@ class GenConfig:
     start_date: str = "2023-01-01"
     horizon_days: int = 365
     date_pair_sigma: float = 20.0
+
+    # Recurrence task (§5): a fraction of (debtor,creditor) relationships are
+    # RECURRING — ≥ recur_min_txns transactions at a regular interval with a
+    # stable amount; the rest are irregular. Grounded choice (see header).
+    recur_fraction: float = 0.25       # share of eligible pairs made recurring
+    recur_min_txns: int = 3            # "≥3 txns at regular spacing" → recurring
+    recur_intervals: tuple = (7, 14, 30)  # days between recurring payments
+    recur_amount_sigma: float = 0.05   # tight (log-space) amount spread when recurring
 
     seed: int = 7
 
@@ -179,9 +201,17 @@ def generate_accounts(rng, cfg: GenConfig):
 
 
 def generate_transactions(rng, cfg: GenConfig, accs):
+    """Yield rows as (src, dest, amount, date, group_id, recurring).
+
+    `group_id` is unique per (debtor,creditor) relationship instance — it groups
+    the records that form one multi-record example for the §5 recurrence task and
+    is NOT a model feature (absent from COLUMN_BUCKETS). `recurring` is the
+    per-pair recurrence ground truth.
+    """
     start = date.fromisoformat(cfg.start_date)
     n_acc = len(accs)
     rows = []
+    group = 0
 
     while len(rows) < cfg.num_transactions:
         src = accs[rng.integers(n_acc)]
@@ -195,13 +225,29 @@ def generate_transactions(rng, cfg: GenConfig, accs):
             # per-pair amount/date mean+variance, then sample each txn
             pair_log_mu = rng.normal(cfg.amount_log_mu, cfg.amount_log_sigma)
             pair_day_mu = rng.uniform(0, cfg.horizon_days)
+            group += 1
 
-            for _ in range(n_txns):
-                amt = float(np.exp(rng.normal(pair_log_mu, cfg.amount_pair_sigma)))
-                day = int(np.clip(rng.normal(pair_day_mu, cfg.date_pair_sigma),
-                                  0, cfg.horizon_days))
+            # Recurring relationships: ≥ recur_min_txns evenly-spaced payments at
+            # a fixed interval with a stable amount (the learnable recurrence
+            # signal). Irregular pairs keep the original random spacing/amount.
+            recurring = (n_txns >= cfg.recur_min_txns
+                         and rng.random() < cfg.recur_fraction)
+            if recurring:
+                interval = int(rng.choice(cfg.recur_intervals))
+                span = interval * (n_txns - 1)
+                t0 = rng.uniform(0, max(1.0, cfg.horizon_days - span))
+
+            for k in range(n_txns):
+                if recurring:
+                    amt = float(np.exp(rng.normal(pair_log_mu, cfg.recur_amount_sigma)))
+                    day = int(np.clip(t0 + k * interval, 0, cfg.horizon_days))
+                else:
+                    amt = float(np.exp(rng.normal(pair_log_mu, cfg.amount_pair_sigma)))
+                    day = int(np.clip(rng.normal(pair_day_mu, cfg.date_pair_sigma),
+                                      0, cfg.horizon_days))
                 rows.append((src, dest, round(amt, 2),
-                             (start + timedelta(days=day)).isoformat()))
+                             (start + timedelta(days=day)).isoformat(),
+                             group, recurring))
                 if len(rows) >= cfg.num_transactions:
                     break
             if len(rows) >= cfg.num_transactions:
@@ -252,6 +298,47 @@ def assign_risk(src: Account, dest: Account, amount: float, rng):
 
 
 # --------------------------------------------------------------------------- #
+# Geography span label  (paper §5 task: US / Americas / EMEA / Asia / International)
+# --------------------------------------------------------------------------- #
+# Grounded rule: a transaction spanning two regions is International; otherwise it
+# takes its shared region, with US split out as its own span (the paper lists US
+# separately from Americas). Derived from the parties' countries, like assign_risk.
+
+GEO_SPANS = ["US", "Americas", "EMEA", "Asia", "International"]
+
+
+def assign_geo(src: Account, dest: Account) -> str:
+    _, src_region = COUNTRIES[src.country]
+    _, dst_region = COUNTRIES[dest.country]
+    if src_region != dst_region:
+        return "International"
+    if src.country == "US" and dest.country == "US":
+        return "US"
+    return src_region  # Americas (non-US) / EMEA / Asia
+
+
+# --------------------------------------------------------------------------- #
+# Expense type label  (paper §5 task: Capital / Operational / Technology / Other)
+# --------------------------------------------------------------------------- #
+# Grounded rule: the creditor's (payee's) industry determines the expense
+# category of the payment. Mapping is a documented choice (like assign_risk).
+
+EXPENSE_TYPES = ["Capital", "Operational", "Technology", "Other"]
+_EXPENSE_BY_INDUSTRY = {
+    "Technology": "Technology",
+    "Industrials": "Capital",
+    "Energy": "Capital",
+    "Consumer": "Operational",
+    "Communications": "Operational",
+    "Financial": "Other",
+}
+
+
+def assign_expense(dest: Account) -> str:
+    return _EXPENSE_BY_INDUSTRY[dest.industry]
+
+
+# --------------------------------------------------------------------------- #
 # Layer 1 projection: transaction -> pacs.008-typed row
 # --------------------------------------------------------------------------- #
 # Mapping (paper Figure 4 column -> pacs.008 element):
@@ -284,8 +371,30 @@ COLUMN_BUCKETS = {
     ],
 }
 
+# Paper §5 downstream tasks. Each is a templated tagging task over the SAME frozen
+# transaction representation (Layer 4 ψ conditions on the task id). `metric`
+# routes Layer 5 scoring; `records` is "single" (one transaction per example) or
+# "multi" (Eq. 5 interleaving over a group). Downstream modules read this manifest
+# from column_schema.json — they never hard-code the task/label lists (§0.4).
+TASKS = [
+    {"name": "risk", "label_column": "risk_label",
+     "label_values": ["Low", "Medium", "High"],
+     "metric": "imbalance", "positive_class": "High", "records": "single"},
+    {"name": "geography", "label_column": "geo_label",
+     "label_values": GEO_SPANS,
+     "metric": "multiclass", "records": "single"},
+    {"name": "expense", "label_column": "expense_label",
+     "label_values": EXPENSE_TYPES,
+     "metric": "multiclass", "records": "single"},
+    {"name": "recurrence", "label_column": "recurrence_label",
+     "label_values": ["No", "Yes"],
+     "metric": "binary", "positive_class": "Yes",
+     "records": "multi", "group_column": "group_id"},
+]
 
-def project_to_pacs008(src: Account, dest: Account, amount, dte, channel, risk):
+
+def project_to_pacs008(src: Account, dest: Account, amount, dte, channel,
+                       risk, geo, expense, recurrence, group_id):
     return {
         # --- high-cardinality categorical (partitioning embedder) ---
         "DbtrAcct_Id": src.account_id,
@@ -309,8 +418,13 @@ def project_to_pacs008(src: Account, dest: Account, amount, dte, channel, risk):
         "Cdtr_Industry": dest.industry,
         "Dbtr_SubIndustry": src.sub_industry,
         "Cdtr_SubIndustry": dest.sub_industry,
-        # --- label in the paper's risk-tag slot ---
+        # --- task labels (paper §5: risk / geography / expense / recurrence) ---
         "risk_label": risk,
+        "geo_label": geo,
+        "expense_label": expense,
+        "recurrence_label": recurrence,
+        # --- grouping key for multi-record recurrence examples (NOT a feature) ---
+        "group_id": group_id,
     }
 
 
@@ -324,11 +438,15 @@ def build_dataset(cfg: GenConfig) -> pd.DataFrame:
     txns = generate_transactions(rng, cfg, accs)
 
     records = []
-    for src, dest, amt, dte in txns:
+    for src, dest, amt, dte, group_id, recurring in txns:
         channel = rng.choice(SETTLEMENT_METHODS) if rng.random() < 0.7 \
             else rng.choice(CHANNELS)
         risk = assign_risk(src, dest, amt, rng)
-        records.append(project_to_pacs008(src, dest, amt, dte, channel, risk))
+        geo = assign_geo(src, dest)
+        expense = assign_expense(dest)
+        recurrence = "Yes" if recurring else "No"
+        records.append(project_to_pacs008(src, dest, amt, dte, channel, risk,
+                                          geo, expense, recurrence, group_id))
 
     df = pd.DataFrame.from_records(records)
     return df, accs
@@ -371,12 +489,19 @@ def main():
 
     schema = {
         "buckets": COLUMN_BUCKETS,
+        # risk stays the default single-label contract for back-compatibility;
+        # the full task suite (incl. risk) lives under "tasks".
         "label_column": "risk_label",
         "label_values": ["Low", "Medium", "High"],
+        "tasks": TASKS,
+        "group_column": "group_id",
         "n_rows": int(len(df)),
         "n_accounts": len(accs),
         "vocab": vocab_report(df),
-        "risk_distribution": df["risk_label"].value_counts().to_dict(),
+        "label_distributions": {
+            t["label_column"]: df[t["label_column"]].value_counts().to_dict()
+            for t in TASKS
+        },
     }
     with open(args.schema_out, "w") as f:
         json.dump(schema, f, indent=2)
@@ -384,7 +509,8 @@ def main():
     print(f"Wrote {len(df):,} rows -> {written}")
     print(f"Accounts: {len(accs):,}")
     print(f"Vocab: {json.dumps(schema['vocab'], indent=2)}")
-    print(f"Risk dist: {schema['risk_distribution']}")
+    for col, dist in schema["label_distributions"].items():
+        print(f"{col}: {dist}")
 
 
 if __name__ == "__main__":

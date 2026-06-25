@@ -158,6 +158,10 @@ class DecoderConfig:
     adapter_tokens: int = 1
     prefix_len: int = 8
     task_shared_dim: Optional[int] = None
+    # Max records interleaved per example (Eq. 5). 1 = single-record tasks
+    # (risk/geo/expense); >1 enables the multi-record recurrence task with
+    # sentinels [R1]…[R{max_records}].
+    max_records: int = 1
     # φ realization (paper leaves the injection unspecified, "similar to prompt
     # tuning"):
     #   "prefix" — per-layer learnable prefix KV (prefix-tuning); most faithful to
@@ -196,7 +200,10 @@ class MultimodalDecoder(nn.Module):
             self.soft_prompt = nn.Parameter(torch.randn(config.prefix_len, d_llm) * 0.02)
         else:
             raise ValueError(f"phi_mode must be 'prefix' or 'prompt', got {config.phi_mode!r}")
-        self.row_sentinel = nn.Parameter(torch.randn(d_llm) * 0.02)  # [R1]
+        # One learnable sentinel per record slot: [R1]…[R{max_records}]. Single
+        # row (max_records=1) reproduces the original single-record [R1].
+        self.max_records = config.max_records
+        self.row_sentinel = nn.Parameter(torch.randn(config.max_records, d_llm) * 0.02)
 
         self._freeze_base()
 
@@ -235,22 +242,35 @@ class MultimodalDecoder(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     # -- Eq. 5 interleaving ----------------------------------------------- #
-    def build_inputs(self, batch: dict, task_ids: torch.Tensor,
+    def build_inputs(self, records, task_ids: torch.Tensor,
                      instruction_ids: torch.Tensor):
-        """z_i = Ξ_LLM(s) ⊕ Φ(f(x)) ⊕ Ξ_LLM(t) ⊕ Ξ_task(k)  → (embeds, mask)."""
-        with torch.no_grad():                       # f is frozen → constant feature
-            f = self.encoder.encode(batch)          # (B, D_enc)
-        B = f.shape[0]
+        """z_i = Ξ_LLM(s(1)) ⊕ Φ(f(x_i1)) ⊕ … ⊕ Ξ_LLM(t) ⊕ Ξ_task(k) → (embeds, mask).
 
-        sentinel = self.row_sentinel.view(1, 1, -1).expand(B, -1, -1)   # (B,1,Dllm)
-        record = self.adapter(f)                                        # (B,n_tok,Dllm)
-        instr = self.llm.embed_tokens(instruction_ids)                  # (B,S_t,Dllm)
-        task = self.task_embedding(task_ids).unsqueeze(1)               # (B,1,Dllm)
+        `records` is a single batch dict (single-record tasks) or a list of M
+        batch dicts (multi-record, e.g. recurrence). Each record j contributes its
+        sentinel [R{j+1}] followed by its adapter tokens Φ(f(x_ij)); f stays frozen.
+        """
+        if isinstance(records, dict):
+            records = [records]
+        M = len(records)
+        if M > self.max_records:
+            raise ValueError(f"{M} records exceeds max_records={self.max_records}")
+
+        with torch.no_grad():                       # f is frozen → constant feature
+            feats = [self.encoder.encode(r) for r in records]           # M × (B,D_enc)
+        B = feats[0].shape[0]
 
         parts = []
         if self.phi_mode == "prompt":                                   # φ as soft prompt
             parts.append(self.soft_prompt.unsqueeze(0).expand(B, -1, -1))
-        parts += [sentinel, record, instr, task]
+        for j, f in enumerate(feats):
+            sentinel = self.row_sentinel[j].view(1, 1, -1).expand(B, -1, -1)  # (B,1,Dllm)
+            record = self.adapter(f)                                    # (B,n_tok,Dllm)
+            parts += [sentinel, record]
+        instr = self.llm.embed_tokens(instruction_ids)                  # (B,S_t,Dllm)
+        task = self.task_embedding(task_ids).unsqueeze(1)               # (B,1,Dllm)
+        parts += [instr, task]
+
         z = torch.cat(parts, dim=1)                                     # (B,S_z,Dllm)
         mask = torch.ones(z.shape[0], z.shape[1], device=z.device)
         return z, mask
