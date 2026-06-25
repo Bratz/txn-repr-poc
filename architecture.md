@@ -27,10 +27,13 @@ In scope (replication):
 - §3.3 adaptive numerical quantization
 - §3.4 composite loss (reconstruction + batch-hard triplet)
 - §4 / §4.1 frozen-encoder + frozen-LLM multimodal decoder with adapters
+- §5 the paper's FOUR downstream tasks — risk, geography, expense
+  (single-record) and recurrence (multi-record, Eq. 5 interleaving)
 
 Out of scope (walked back — these are v2, not v1):
 - data-completeness feature vector
-- multi-record structuring / layering chain task
+- multi-record STRUCTURING / LAYERING chain task — an AML extension *beyond* the
+  paper; NOT the same as §5 recurrence (a paper task, in scope above)
 - held-out-typology generalization split
 
 ---
@@ -103,8 +106,11 @@ latency budget — state it explicitly in any writeup.
   ```
 - Objective (eq. 6): `L = −Σ log P(y_i | z_i; Φ, ψ, φ)`
 - Row sentinels `s(·)` = `[R1], [R2], …` are LLM-vocabulary tokens.
-- v1 uses **single record per example** (mirrors paper's risk/geo/expense
-  tasks). No multi-record task in v1.
+- Tasks are read from the `tasks` manifest in `column_schema.json` (never
+  hard-coded). The single-record tasks (risk, geography, expense) pass one
+  transaction; **recurrence** uses the multi-record path — `M` records with
+  sentinels `[R1]…[RM]` interleaved per Eq. 5, `M=R` (default 3). `ψ` conditions
+  on the task id (`n_tasks=4`); the decoder is instruction-tuned jointly.
 - **Invariant:** if `f` or the LLM ever train, it is a different experiment.
 
 ### Layer 5 — Baselines & evaluation harness

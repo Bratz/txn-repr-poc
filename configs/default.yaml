@@ -106,8 +106,10 @@ tabular_encoder:                # §3.4 + BERT — PAPER
 # -----------------------------------------------------------------------------
 decoder:                        # §4 / §4.1 — PAPER
   llm: phi                      # frozen
-  records_per_example: 1        # v1 single-record (no chain task)
-  row_sentinels: true           # [R1], [R2], … as LLM-vocab tokens
+  records_per_example: R        # 1 for single-record tasks; R (default 3) for the
+                                # multi-record recurrence task (Eq. 5 interleaving)
+  multi_task: true              # joint instruction tuning across §5's four tasks
+  row_sentinels: true           # [R1] … [RM] (learnable soft tokens; freeze-exact)
   trainable:                    # ONLY these three train; f and LLM frozen
     adapters_Phi: true
     task_embedding_psi: true
@@ -121,6 +123,13 @@ eval:
   primary_metrics: [pr_auc, recall_at_fixed_fpr, f1_at_threshold]   # FORCED
   fixed_fpr: 0.01               # SET(P0): 1% FPR operating point for recall@FPR
   report_accuracy_alongside: true   # only for comparability to paper tables
+  # Per-task metric routing (§5). Risk is the imbalanced headline (C2); geography
+  # and expense are balanced → accuracy + macro-F1; recurrence is binary PR-AUC.
+  task_metrics:
+    risk: imbalance             # PR-AUC / recall@FPR / F1 (positive=High)
+    geography: multiclass       # accuracy + macro-F1 (balanced)
+    expense: multiclass         # accuracy + macro-F1 (balanced)
+    recurrence: binary          # PR-AUC / recall@FPR / F1 (positive=Yes)
   baselines:
     catboost: true
     full_finetune: optional     # needed for C2 trainable_param_ratio

@@ -1,0 +1,92 @@
+<svg viewBox="0 0 960 670" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" role="img">
+  <title>How Phi-1.5 is used in the decoder architecture</title>
+  <desc>A payment is projected to a row, encoded by a frozen 25M tabular encoder into one embedding f(x). In Layer 4 that embedding becomes a single token, interleaved with a row marker, an instruction, and a task signal, then fed to a frozen Phi-1.5. Phi predicts the next word, which maps to the task's label. Only the small adapters Phi, psi, phi are trained; the encoder and Phi stay frozen.</desc>
+
+  <rect x="0" y="0" width="960" height="670" fill="#ffffff"/>
+
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6b6b70"/></marker>
+  </defs>
+
+  <text x="40" y="40" font-size="22" font-weight="700" fill="#1d1d1f">Architecture — and how Phi-1.5 is used</text>
+  <text x="40" y="64" font-size="13.5" fill="#6b6b70">The payment becomes one token; a frozen Phi-1.5 reads it next to an instruction. Only small adapters learn.</text>
+
+  <!-- TOP ROW: representation pipeline -->
+  <g font-size="13.5">
+    <rect x="40" y="96" width="140" height="58" rx="9" fill="#ffffff" stroke="#d9d9dd" stroke-width="1.5"/>
+    <text x="110" y="121" font-weight="600" text-anchor="middle" fill="#1d1d1f">Payment</text>
+    <text x="110" y="139" font-size="11" text-anchor="middle" fill="#6b6b70">pacs.008 message</text>
+
+    <line x1="180" y1="125" x2="214" y2="125" stroke="#6b6b70" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="216" y="96" width="140" height="58" rx="9" fill="#ffffff" stroke="#d9d9dd" stroke-width="1.5"/>
+    <text x="286" y="121" font-weight="600" text-anchor="middle" fill="#1d1d1f">Projection</text>
+    <text x="286" y="139" font-size="11" text-anchor="middle" fill="#6b6b70">&#8594; tabular row</text>
+
+    <line x1="356" y1="125" x2="390" y2="125" stroke="#6b6b70" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="392" y="96" width="248" height="58" rx="9" fill="#6b6b70" fill-opacity="0.12" stroke="#c4c4c8" stroke-width="1.5"/>
+    <text x="516" y="121" font-weight="600" text-anchor="middle" fill="#1d1d1f">Transaction encoder</text>
+    <text x="516" y="139" font-size="11" text-anchor="middle" fill="#6b6b70">§3.1–3.4 · BERT 25M · frozen</text>
+
+    <line x1="640" y1="125" x2="674" y2="125" stroke="#6b6b70" stroke-width="2" marker-end="url(#a)"/>
+    <rect x="676" y="96" width="110" height="58" rx="9" fill="#6b6b70" fill-opacity="0.12" stroke="#c4c4c8" stroke-width="1.5"/>
+    <text x="731" y="121" font-weight="700" text-anchor="middle" fill="#1d1d1f">f(x)</text>
+    <text x="731" y="139" font-size="11" text-anchor="middle" fill="#6b6b70">one embedding</text>
+  </g>
+
+  <!-- LAYER 4 PANEL -->
+  <rect x="40" y="186" width="880" height="424" rx="14" fill="none" stroke="#d9d9dd" stroke-width="1.5"/>
+  <text x="58" y="212" font-size="13" font-weight="700" fill="#6b6b70">Layer 4 · Decoder</text>
+
+  <path d="M731,154 C 731,200 470,205 350,242" fill="none" stroke="#6b6b70" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+  <!-- interleaved input strip -->
+  <g font-size="13">
+    <rect x="64" y="240" width="96" height="62" rx="8" fill="#2c6ecb" fill-opacity="0.12" stroke="#2c6ecb" stroke-width="1.5"/>
+    <text x="112" y="266" font-weight="700" text-anchor="middle" fill="#1d1d1f">φ prompt</text>
+    <text x="112" y="284" font-size="10.5" text-anchor="middle" fill="#6b6b70">soft hint</text>
+
+    <rect x="170" y="240" width="70" height="62" rx="8" fill="#2c6ecb" fill-opacity="0.12" stroke="#2c6ecb" stroke-width="1.5"/>
+    <text x="205" y="266" font-weight="700" text-anchor="middle" fill="#1d1d1f">[R1]</text>
+    <text x="205" y="284" font-size="10.5" text-anchor="middle" fill="#6b6b70">marker</text>
+
+    <rect x="250" y="240" width="170" height="62" rx="8" fill="#2c6ecb" fill-opacity="0.12" stroke="#2c6ecb" stroke-width="1.5"/>
+    <text x="335" y="266" font-weight="700" text-anchor="middle" fill="#1d1d1f">Φ( f(x) )</text>
+    <text x="335" y="284" font-size="10.5" text-anchor="middle" fill="#6b6b70">the payment as 1 token</text>
+
+    <rect x="430" y="240" width="214" height="62" rx="8" fill="#ffffff" stroke="#c4c4c8" stroke-width="1.5"/>
+    <text x="537" y="266" font-weight="600" text-anchor="middle" fill="#1d1d1f">instruction</text>
+    <text x="537" y="284" font-size="10.5" text-anchor="middle" fill="#6b6b70">“classify the risk …” (words)</text>
+
+    <rect x="654" y="240" width="96" height="62" rx="8" fill="#2c6ecb" fill-opacity="0.12" stroke="#2c6ecb" stroke-width="1.5"/>
+    <text x="702" y="266" font-weight="700" text-anchor="middle" fill="#1d1d1f">ψ task</text>
+    <text x="702" y="284" font-size="10.5" text-anchor="middle" fill="#6b6b70">which question</text>
+  </g>
+  <path d="M64,312 L64,320 L750,320 L750,312" fill="none" stroke="#c4c4c8" stroke-width="1.3"/>
+  <text x="407" y="338" font-size="11.5" text-anchor="middle" fill="#6b6b70">one interleaved input sequence (Eq. 5)</text>
+
+  <line x1="407" y1="344" x2="407" y2="372" stroke="#6b6b70" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="227" y="374" width="360" height="92" rx="12" fill="#6b6b70" fill-opacity="0.13" stroke="#9a9aa0" stroke-width="2"/>
+  <text x="407" y="414" font-size="18" font-weight="700" text-anchor="middle" fill="#1d1d1f">Phi-1.5</text>
+  <text x="407" y="438" font-size="11.5" text-anchor="middle" fill="#6b6b70">frozen · ~1.3B params · fp32</text>
+  <text x="407" y="454" font-size="11.5" text-anchor="middle" fill="#6b6b70">reads embeddings, never trained</text>
+
+  <line x1="407" y1="466" x2="407" y2="500" stroke="#6b6b70" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="227" y="502" width="360" height="60" rx="10" fill="#ffffff" stroke="#d9d9dd" stroke-width="1.5"/>
+  <text x="407" y="527" font-size="14" font-weight="600" text-anchor="middle" fill="#1d1d1f">Next word → A / B / C / …</text>
+  <text x="407" y="546" font-size="11" text-anchor="middle" fill="#6b6b70">= the task's label (risk / geography / expense / recurrence)</text>
+
+  <!-- side callouts -->
+  <rect x="636" y="374" width="262" height="60" rx="9" fill="#2c6ecb" fill-opacity="0.12" stroke="#2c6ecb" stroke-width="1.5"/>
+  <text x="652" y="400" font-size="13" font-weight="700" fill="#1d1d1f">Trains:  Φ · ψ · φ</text>
+  <text x="652" y="420" font-size="11" fill="#6b6b70">tiny &amp; fast — &lt;1% of a full fine-tune</text>
+
+  <rect x="636" y="442" width="262" height="60" rx="9" fill="#6b6b70" fill-opacity="0.12" stroke="#9a9aa0" stroke-width="1.5"/>
+  <text x="652" y="468" font-size="13" font-weight="700" fill="#1d1d1f">Frozen:  encoder f · Phi-1.5</text>
+  <text x="652" y="488" font-size="11" fill="#6b6b70">the headline invariant — never train these</text>
+
+  <!-- legend -->
+  <rect x="300" y="634" width="14" height="14" rx="3" fill="#2c6ecb" fill-opacity="0.18" stroke="#2c6ecb" stroke-width="1.5"/>
+  <text x="322" y="645" font-size="12" fill="#6b6b70">Trained (small)</text>
+  <rect x="470" y="634" width="14" height="14" rx="3" fill="#6b6b70" fill-opacity="0.14" stroke="#9a9aa0" stroke-width="1.5"/>
+  <text x="492" y="645" font-size="12" fill="#6b6b70">Frozen</text>
+</svg>
