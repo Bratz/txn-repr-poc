@@ -246,18 +246,23 @@ class MultimodalDecoder(nn.Module):
                      instruction_ids: torch.Tensor):
         """z_i = Ξ_LLM(s(1)) ⊕ Φ(f(x_i1)) ⊕ … ⊕ Ξ_LLM(t) ⊕ Ξ_task(k) → (embeds, mask).
 
-        `records` is a single batch dict (single-record tasks) or a list of M
-        batch dicts (multi-record, e.g. recurrence). Each record j contributes its
-        sentinel [R{j+1}] followed by its adapter tokens Φ(f(x_ij)); f stays frozen.
+        `records` is a single batch dict (single-record tasks), a list of M batch
+        dicts (multi-record, e.g. recurrence), OR a precomputed feature tensor
+        (B, D_enc) / list of such tensors. The tensor form (v2) feeds an externally
+        computed entity representation h_USR straight into Φ, bypassing the encoder -
+        this is how the frozen-LLM path scores the sequence model (C5). v1 only ever
+        passes dicts, so its behaviour is unchanged. Each record j contributes its
+        sentinel [R{j+1}] followed by its adapter tokens Φ(·); f stays frozen.
         """
-        if isinstance(records, dict):
+        if isinstance(records, (dict, torch.Tensor)):
             records = [records]
         M = len(records)
         if M > self.max_records:
             raise ValueError(f"{M} records exceeds max_records={self.max_records}")
 
         with torch.no_grad():                       # f is frozen → constant feature
-            feats = [self.encoder.encode(r) for r in records]           # M × (B,D_enc)
+            feats = [r if isinstance(r, torch.Tensor) else self.encoder.encode(r)
+                     for r in records]              # M × (B, D_enc)
         B = feats[0].shape[0]
 
         parts = []

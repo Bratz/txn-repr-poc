@@ -133,3 +133,25 @@ eval:
   baselines:
     catboost: true
     full_finetune: optional     # needed for C2 trainable_param_ratio
+
+# =============================================================================
+# v2 — sequence extension (Layer 3b). BEYOND arXiv:2410.07851. Does NOT affect
+# the v1 run (run_gpu.py); consumed only by run_seq.py. See docs/V2_DIRECTION.md.
+# These are v2 design choices, NOT paper-pinned values.
+# =============================================================================
+v2_history_encoder:
+  enabled: false                # v1 is the headline; v2 is opt-in via run_seq.py
+  actor: DbtrAcct_Id            # the entity whose ordered history is modelled
+  max_len: 256                  # cap to the most recent N events (PRAGMA-style)
+  hidden: 512                   # must equal the v1 encoder hidden (e_t width)
+  layers: 4
+  heads: 8
+  objective:
+    masked_event: true          # PRAGMA-style whole-event reconstruction
+    coles_triplet: true         # CoLES contrastive — reuses batch_hard_triplet_loss
+    mask_prob: 0.15
+  drop_llm: true                # Option A (linear/LoRA on h_USR); see C5 fork
+  claims:                       # v2 falsifiable claims (thresholds pre-registered)
+    C3_temporal_lift_pp: 10.0   # sequence model beats v1 single-record by >= 10pp PR-AUC
+    C4_heldout_gain_pp: 5.0     # h_USR + probe beats CatBoost on UNSEEN accounts by >= 5pp
+    C5_llm_gap_pp: 2.0          # within 2pp without the LLM -> drop it
