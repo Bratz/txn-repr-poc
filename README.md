@@ -8,9 +8,12 @@ A grounded, faithful prototype of:
 Applied to ISO 20022 (pacs.008) payments for fraud/risk tagging, on **synthetic
 data only**. v1 replicates the paper — no extensions.
 
-## Architecture — and how Phi-1.5 is used
+## Architecture — v1 (the paper) and the v2 sequence extension
 
-![Architecture and Phi-1.5 usage](docs/architecture-phi.svg)
+![Architecture: v1 decoder and v2 sequence extension](docs/architecture-phi.svg)
+
+The diagram's left lane is **v1** (faithful to the paper); the right, dashed lane is
+**v2** (opt-in, beyond the paper). Both reuse one frozen per-transaction embedding `f(x)`.
 
 A payment is projected to a tabular row and encoded by a **frozen 25M tabular
 encoder** (§3.1–3.4) into a single embedding `f(x)`. In **Layer 4**, that
@@ -30,6 +33,14 @@ tokens (`A/B/C…`) gives the task's label.
 - `LLMInterface` makes the LLM swappable: `MockLLM` for the CPU test suite,
   `HFCausalLM("microsoft/phi-1_5")` for the real GPU run (the paper reports a
   Phi-class and a Falcon model).
+
+**v2 — sequence extension (beyond the paper, opt-in).** The same frozen `f(x)`, taken
+over an entity's *ordered history* with inter-arrival encoding, feeds a **Layer-3b
+history encoder** (`[USR]` + events, masked + CoLES) into one entity vector `h_USR`,
+scored by a cheap linear/LoRA head (**Option A**) or the frozen Phi decoder
+(**Option B**). On the temporal regime-change task the sequence model beats both an
+order-blind pooled baseline and a gradient-boosted tree on unseen accounts. v1 is
+untouched; see [`docs/V2_DIRECTION.md`](docs/V2_DIRECTION.md) and `run_seq.py`.
 
 ## Read these first (in order)
 1. `architecture.md` — what each component is (source of truth).

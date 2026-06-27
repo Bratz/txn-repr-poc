@@ -77,76 +77,7 @@ def table(headers, rows, widths):
     story.append(t); story.append(Spacer(1, 8))
 
 
-def design_drawing():
-    """Native reportlab redraw of docs/architecture-phi.svg (runtime data flow)."""
-    d = Drawing(470, 332)
-    ac_f, ac_s = colors.HexColor("#dce8f7"), colors.HexColor("#2c6ecb")
-    fr_f, fr_s = colors.HexColor("#e7e8ea"), colors.HexColor("#9a9aa0")
-    pl_f, pl_s = colors.white, colors.HexColor("#c4c4c8")
-    grey = colors.HexColor("#6b6b70")
-
-    def txt(x, y, s, size=8, bold=False, col=INK, anchor="middle"):
-        d.add(String(x, y, s, fontName="Helvetica-Bold" if bold else "Helvetica",
-                     fontSize=size, fillColor=col, textAnchor=anchor))
-
-    def cbox(x, y, w, h, kind, title, sub=None, tsize=8):
-        f, s = {"a": (ac_f, ac_s), "f": (fr_f, fr_s), "p": (pl_f, pl_s)}[kind]
-        d.add(Rect(x, y, w, h, rx=4, ry=4, fillColor=f, strokeColor=s, strokeWidth=1))
-        cx = x + w / 2
-        if sub:
-            txt(cx, y + h / 2 + 2, title, tsize, True)
-            txt(cx, y + h / 2 - 8, sub, 6, col=MUTED)
-        else:
-            txt(cx, y + h / 2 - 3, title, tsize, True)
-
-    def arrow(x1, y1, x2, y2, dash=False):
-        ln = Line(x1, y1, x2, y2, strokeColor=grey, strokeWidth=1.2)
-        if dash:
-            ln.strokeDashArray = [3, 2]
-        d.add(ln)
-        ang = math.atan2(y2 - y1, x2 - x1)
-        bx, by = x2 - 5.5 * math.cos(ang), y2 - 5.5 * math.sin(ang)
-        px, py = -math.sin(ang) * 2.6, math.cos(ang) * 2.6
-        d.add(Polygon([x2, y2, bx + px, by + py, bx - px, by - py],
-                      fillColor=grey, strokeColor=grey))
-
-    # top pipeline: payment -> projection -> frozen encoder -> f(x)
-    cbox(0, 292, 66, 30, "p", "Payment", "pacs.008")
-    arrow(66, 307, 80, 307)
-    cbox(80, 292, 66, 30, "p", "Projection", "to row")
-    arrow(146, 307, 160, 307)
-    cbox(160, 292, 140, 30, "f", "Transaction encoder", "BERT 25M . frozen")
-    arrow(300, 307, 314, 307)
-    cbox(314, 292, 52, 30, "f", "f(x)", "embedding")
-
-    # Layer 4 panel
-    d.add(Rect(0, 18, 470, 250, rx=6, ry=6, fillColor=colors.white,
-               strokeColor=colors.HexColor("#d9d9dd"), strokeWidth=1))
-    txt(8, 254, "Layer 4 - Decoder", 8, True, ACCENT, anchor="start")
-
-    # interleaved input (Eq. 5)
-    cbox(10, 212, 58, 34, "a", "phi prompt", "soft", 7.5)
-    cbox(74, 212, 36, 34, "a", "[R1]", "mark", 7.5)
-    cbox(116, 212, 86, 34, "a", "Phi( f(x) )", "payment -> 1 token", 7.5)
-    cbox(208, 212, 120, 34, "p", "instruction", "classify the risk ...", 7.5)
-    cbox(334, 212, 58, 34, "a", "psi task", "which Q", 7.5)
-    txt(201, 200, "one interleaved input (Eq. 5)", 6.5, col=MUTED)
-
-    arrow(338, 292, 160, 247, dash=True)   # f(x) feeds the adapter token
-    arrow(201, 197, 201, 158)              # input -> Phi
-    cbox(90, 120, 220, 38, "f", "Phi-1.5", "frozen . ~1.3B params . fp32", 10)
-    arrow(200, 120, 200, 88)               # Phi -> output
-    cbox(90, 52, 220, 36, "p", "next word -> A / B / C", "= the task's label")
-
-    cbox(326, 120, 138, 38, "a", "Trains: Phi . psi . phi", "~7.64M (<1% of full tune)", 7.5)
-    cbox(326, 74, 138, 38, "f", "Frozen: encoder f, Phi-1.5", None, 7.5)
-
-    # legend
-    d.add(Rect(150, 28, 10, 10, fillColor=ac_f, strokeColor=ac_s, strokeWidth=1))
-    txt(166, 30, "Trained (small)", 7, col=MUTED, anchor="start")
-    d.add(Rect(264, 28, 10, 10, fillColor=fr_f, strokeColor=fr_s, strokeWidth=1))
-    txt(280, 30, "Frozen", 7, col=MUTED, anchor="start")
-    return d
+from arch_figure import design_drawing   # shared v1+v2 figure (matches architecture-phi.svg)
 
 
 story.append(Paragraph("txn-repr-poc - a maintainer's guide", H1))
@@ -237,10 +168,11 @@ body("Two files carry more than their names admit. "
      "rule and a schema change silently stops reaching the code that depends on it.")
 
 h2("The design in one picture")
-body("Here's how a payment becomes an answer at run time. The encoder turns a payment "
-     "into one embedding; the adapter Phi makes that embedding a single token a frozen "
-     "Phi-1.5 reads alongside the instruction and the task signal. Only the blue pieces "
-     "train.")
+body("The shared stack turns a payment into one frozen embedding f(x). v1 (the paper) "
+     "reads it with a frozen Phi-1.5 + small adapters for the four per-transaction tasks. "
+     "v2 (opt-in, beyond the paper) collects an entity's f(x) over time into a history "
+     "encoder -> h_USR, scored by a cheap head (Option A) or the frozen Phi (Option B, "
+     "which C5 says to drop). Blue = trained, grey = frozen.")
 story.append(design_drawing())
 story.append(Spacer(1, 10))
 
