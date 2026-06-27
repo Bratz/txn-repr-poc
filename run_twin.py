@@ -85,6 +85,40 @@ def intake_eval(e, pay, twin, tr, ev):
     }
 
 
+def demo(e, pay, twin, tr, ev, n, seed=0):
+    """Print the twin's intake forecast for a few held-out payments, plus an
+    unsupervised anomaly score (IsolationForest on f(x)) and the actual outcome."""
+    from sklearn.ensemble import IsolationForest
+    from sklearn.linear_model import LogisticRegression, Ridge
+
+    exc_clf = {c: LogisticRegression(max_iter=1000, class_weight="balanced").fit(e[tr], pay[c].to_numpy()[tr])
+               for c in twin["exc_columns"] if len(set(pay[c].to_numpy()[tr])) > 1}
+    ys = pay[twin["status_column"]].to_numpy()
+    st = LogisticRegression(max_iter=1000, class_weight="balanced").fit(e[tr], ys[tr])
+    eta = Ridge().fit(e[tr], pay[twin["eta_column"]].to_numpy(float)[tr])
+    iso = IsolationForest(n_estimators=120, random_state=0).fit(e[tr])
+    anom = -iso.score_samples(e[ev])                     # higher = more anomalous
+    thr = float(np.quantile(anom, 0.9))
+
+    sel = np.random.default_rng(seed).choice(len(ev), size=min(n, len(ev)), replace=False)
+    print("\n=== per-payment twin demo (held-out payments) ===")
+    for j in sel:
+        i = int(ev[j])
+        r = pay.iloc[i]
+        top = sorted(((c.replace("exc_", ""), float(exc_clf[c].predict_proba(e[i:i+1])[0, 1]))
+                      for c in exc_clf), key=lambda t: -t[1])[:3]
+        sp = st.predict_proba(e[i:i+1])[0]
+        actual = [c.replace("exc_", "") for c in twin["exc_columns"] if r[c] == 1] or ["none"]
+        print(f"\npayment {int(r[twin['id_column']])}  {r['direction']}  "
+              f"{r['IntrBkSttlmAmt']:.0f} {r['Ccy']}  {r['Dbtr_Ctry']}->{r['Cdtr_Ctry']}")
+        print("  predicted exceptions: " + ", ".join(f"{k} {p:.2f}" for k, p in top))
+        print(f"  predicted status: {st.classes_[sp.argmax()]} ({sp.max():.2f})   "
+              f"predicted ETA: {eta.predict(e[i:i+1])[0]:.0f} min")
+        print(f"  anomaly score: {anom[j]:.3f}" + ("   <-- ANOMALY (top 10%)" if anom[j] >= thr else ""))
+        print(f"  ACTUAL: status {r[twin['status_column']]} | exceptions {actual} | "
+              f"ETA {r[twin['eta_column']]:.0f} min")
+
+
 # --------------------------------------------------------------------------- #
 # IN-FLIGHT (v2) - step encoder + history-encoder backbone -> next exception
 # --------------------------------------------------------------------------- #
@@ -229,6 +263,8 @@ def main():
     ap.add_argument("--schema", default=str(ROOT / "data" / "column_schema_twin.json"))
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--inflight-epochs", type=int, default=4)
+    ap.add_argument("--demo", type=int, default=0,
+                    help="print the twin's forecast + anomaly score for N held-out payments")
     ap.add_argument("--out", default=str(ROOT / "results_twin.json"))
     args = ap.parse_args()
 
@@ -264,6 +300,9 @@ def main():
     print(f"[intake] status acc {intake['status_accuracy']:.3f} (majority {intake['status_majority_baseline']:.3f}) "
           f"macroF1 {intake['status_macro_f1']:.3f} | "
           f"ETA MAE {intake['eta_mae_min']:.0f} vs baseline {intake['eta_baseline_mae_min']:.0f} min")
+
+    if args.demo:
+        demo(e_pay, pay, twin, tr, ev, args.demo)
 
     inflight = run_inflight(evt, pay, tr_ids, ev_ids, schema, device, args.inflight_epochs, args.smoke)
     if "note" not in inflight:
