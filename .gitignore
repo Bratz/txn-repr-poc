@@ -9,6 +9,8 @@
 data/column_schema.json
 # v2 generated artifacts (data/synth_sequences.py)
 data/column_schema_seq.json
+# payment-twin generated artifacts (data/synth_workflow.py)
+data/column_schema_twin.json
 
 # model artifacts
 *.pt
@@ -17,6 +19,7 @@ party_store/
 # run outputs
 results.json
 results_seq.json
+results_twin.json
 scored.csv
 # saved model checkpoints
 ckpt/
