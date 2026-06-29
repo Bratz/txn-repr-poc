@@ -103,6 +103,37 @@ probes `f(payment)` for rail routing (vs a **tree baseline** on the raw visible 
 the exception likelihoods, terminal status and ETA, and trains a rail-conditioned in-flight
 next-exception head. Writes `results_india.json`.
 
+### Golden cross-task bench (one set of cases, all tasks)
+
+[`data/golden_cases.py`](../data/golden_cases.py) is a curated, deterministic set of ~14
+payments that hits **every rail**, the **deterministic gates** (over-cap → `limit_exceeded`,
+below-min → `below_min`), a few **stochastic exceptions** (sla_breach / sanctions / fraud /
+batch_return, found by seed-search), and **risk / expense / geography variety** — its labels
+are computed by the real rule functions and lifecycle simulator, so they never drift from the
+code. [`run_golden.py`](../run_golden.py) scores this one set across **all tasks on the same
+frozen backbone**:
+
+```bash
+python run_golden.py --smoke      # CPU
+```
+
+- §5 single-record: `risk`, `geography`, `expense` (probe heads on the same encoder).
+- India rail: `rail_routing`, terminal `status`, `ETA`, exception risks.
+- India sequence: in-flight next-step exception on the golden event log.
+- (recurrence is multi-record/group-level → not part of this per-payment bench.)
+
+It then writes the golden set to **pacs.008 XML, re-parses it through Layer-1, and re-scores**,
+confirming the message-level path agrees on the message-native fields.
+
+Two findings worth keeping:
+- **Hybrid routing.** The learned rail probe is a classifier — it can prefer an *ineligible*
+  rail (e.g. RTGS below ₹2L). `IndiaScorer` now **masks predictions to the eligible set**
+  (`data/rails.eligible_rails`), so served rail predictions are always valid — learned
+  preference constrained by the hard cap/min/cross-border rules.
+- **Enrichment loss over XML.** `industry`/`sub_industry` aren't in pacs.008, so the
+  XML→score path can shift the industry-dependent §5 tasks (risk/expense) vs direct scoring;
+  amount/identifier/country-driven tasks (rail/ETA) are stable.
+
 ### Layer-1: score raw ISO 20022 pacs.008 XML
 
 [`data/iso20022_pacs008.py`](../data/iso20022_pacs008.py) projects a real pacs.008

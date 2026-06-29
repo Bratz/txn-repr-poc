@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from data.iso20022_pacs008 import UNKNOWN, parse_pacs008, parse_pacs008_frame
+from data.iso20022_pacs008 import UNKNOWN, parse_pacs008, parse_pacs008_frame, write_pacs008
 from data.synth_pacs008 import COLUMN_BUCKETS
 
 SAMPLE = Path(__file__).resolve().parents[1] / "data" / "sample_pacs008.xml"
@@ -59,3 +59,13 @@ def test_frame_has_encoder_feature_columns():
 def test_non_pacs008_raises():
     with pytest.raises(ValueError):
         parse_pacs008("<Document><Foo/></Document>")
+
+
+def test_write_then_parse_roundtrips_native_fields():
+    rows = parse_pacs008(SAMPLE)
+    reparsed = parse_pacs008(write_pacs008(rows))
+    assert len(reparsed) == len(rows)
+    for a, b in zip(rows, reparsed):
+        for k in ("IntrBkSttlmAmt", "Ccy", "IntrBkSttlmDt", "DbtrAcct_Id", "CdtrAcct_Id",
+                  "Dbtr_Ctry", "Cdtr_Ctry", "Dbtr_Nm", "Cdtr_Nm", "identifier_type"):
+            assert a[k] == b[k]

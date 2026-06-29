@@ -89,6 +89,20 @@ def train_probes(e, pay, schema, rows):
         if len(set(y[rows])) > 1:
             probes["exc"][c.replace("exc_", "")] = LogisticRegression(
                 max_iter=1000, class_weight="balanced").fit(e[rows], y[rows])
+
+    # §5 single-record task heads on the SAME frozen backbone (risk / geography / expense).
+    # Read from the schema tasks manifest; train only those present + non-degenerate.
+    probes["tasks"] = {}
+    for t in schema.get("tasks", []):
+        col = t["label_column"]
+        if t.get("records") == "multi" or col not in pay.columns:
+            continue                                       # recurrence is multi-record: skip
+        if col == twin["rail_column"]:
+            continue                                       # rail handled by probes["rail"]
+        y = pay[col].to_numpy()
+        if len(set(y[rows])) > 1:
+            probes["tasks"][t["name"]] = LogisticRegression(
+                max_iter=2000, class_weight="balanced").fit(e[rows], y[rows])
     return probes
 
 

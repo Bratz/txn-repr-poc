@@ -363,12 +363,19 @@ def build_dataset(cfg: IndiaConfig):
 
 # Downstream task manifest (read from schema; never hard-coded by trainers - paper rule).
 def _tasks():
+    from data.synth_pacs008 import EXPENSE_TYPES, GEO_SPANS
     return [
         {"name": "risk", "label_column": "risk_label",
          "label_values": ["Low", "Medium", "High"],
          "metric": "imbalance", "positive_class": "High", "records": "single"},
         {"name": "rail_routing", "label_column": "rail",
          "label_values": RAIL_NAMES, "metric": "multiclass", "records": "single"},
+        # §5 single-record tasks. In India mode geography is limited to Asia (domestic) vs
+        # International (cross-border SWIFT); expense varies by creditor industry.
+        {"name": "geography", "label_column": "geo_label",
+         "label_values": GEO_SPANS, "metric": "multiclass", "records": "single"},
+        {"name": "expense", "label_column": "expense_label",
+         "label_values": EXPENSE_TYPES, "metric": "multiclass", "records": "single"},
     ]
 
 

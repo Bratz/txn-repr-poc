@@ -172,6 +172,80 @@ def parse_pacs008_frame(source, enrich: dict | None = None):
     return df
 
 
+# --------------------------------------------------------------------------- #
+# Write (row -> pacs.008 XML) - inverse of the parser
+# --------------------------------------------------------------------------- #
+
+_NS = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08"
+
+
+def _sub(parent, tag, text=None, **attrs):
+    el = ET.SubElement(parent, tag, {k: str(v) for k, v in attrs.items()})
+    if text is not None:
+        el.text = str(text)
+    return el
+
+
+def _party(tx, role, nm, ctry, party_id):
+    p = _sub(tx, role)
+    _sub(p, "Nm", nm)
+    if ctry and ctry != UNKNOWN:
+        _sub(_sub(p, "PstlAdr"), "Ctry", ctry)
+    if party_id and party_id != UNKNOWN:
+        _sub(_sub(_sub(_sub(p, "Id"), "OrgId"), "Othr"), "Id", party_id)
+
+
+def _acct(tx, role, acct_id, iban=False):
+    idel = _sub(_sub(tx, role), "Id")
+    if iban:
+        _sub(idel, "IBAN", acct_id)
+    else:
+        _sub(_sub(idel, "Othr"), "Id", acct_id)
+
+
+def write_pacs008(rows, msg_id="MSG-GOLDEN-0001", cre_dt_tm="2026-06-29T09:30:00") -> str:
+    """Serialise projected rows back into a single pacs.008 FIToFICstmrCdtTrf message.
+
+    The inverse of parse_pacs008 for the message-NATIVE fields (amount/ccy/date, names,
+    countries, account & party ids, SttlmMtd). Enrichment-only fields (industry,
+    identifier_type) are NOT message elements, so they do not round-trip - identifier_type
+    is re-derived on parse, industries default to Unknown.
+    """
+    rows = list(rows)
+    ET.register_namespace("", _NS)
+    doc = ET.Element(f"{{{_NS}}}Document")
+    body = _sub(doc, "FIToFICstmrCdtTrf")
+    grp = _sub(body, "GrpHdr")
+    _sub(grp, "MsgId", msg_id)
+    _sub(grp, "CreDtTm", cre_dt_tm)
+    _sub(grp, "NbOfTxs", len(rows))
+    sttlm = next((r.get("SttlmMtd") for r in rows if r.get("SttlmMtd") not in (None, UNKNOWN)),
+                 "CLRG")
+    _sub(_sub(grp, "SttlmInf"), "SttlmMtd", sttlm)
+
+    for i, r in enumerate(rows):
+        tx = _sub(body, "CdtTrfTxInf")
+        pid = _sub(tx, "PmtId")
+        _sub(pid, "EndToEndId", f"E2E-{i:04d}")
+        _sub(pid, "TxId", f"TX-{i:04d}")
+        _sub(tx, "IntrBkSttlmAmt", f"{float(r['IntrBkSttlmAmt']):.2f}", Ccy=r.get("Ccy", "INR"))
+        _sub(tx, "IntrBkSttlmDt", r.get("IntrBkSttlmDt", "2026-06-29"))
+        _sub(tx, "ChrgBr", "SHAR")
+        _party(tx, "Dbtr", r.get("Dbtr_Nm", UNKNOWN), r.get("Dbtr_Ctry"), r.get("UltmtDbtr_Id"))
+        _acct(tx, "DbtrAcct", r.get("DbtrAcct_Id", UNKNOWN), iban=False)
+        # IBAN on the creditor side when the instrument is BIC/IBAN (cross-border)
+        iban = r.get("identifier_type") == "BIC_IBAN"
+        _party(tx, "Cdtr", r.get("Cdtr_Nm", UNKNOWN), r.get("Cdtr_Ctry"), r.get("UltmtCdtr_Id"))
+        _acct(tx, "CdtrAcct", r.get("CdtrAcct_Id", UNKNOWN), iban=iban)
+        ucp = _sub(tx, "UltmtCdtr")
+        _sub(ucp, "Nm", r.get("UltmtCdtr_Nm", r.get("Cdtr_Nm", UNKNOWN)))
+        if r.get("UltmtCdtr_Id", UNKNOWN) != UNKNOWN:
+            _sub(_sub(_sub(_sub(ucp, "Id"), "OrgId"), "Othr"), "Id", r["UltmtCdtr_Id"])
+
+    ET.indent(doc, space="  ")
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(doc, encoding="unicode")
+
+
 def main():
     import argparse
     import json

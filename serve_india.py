@@ -61,6 +61,7 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
         "rails": list(probes["rail"].classes_),
         "statuses": list(probes["status"].classes_),
         "exceptions": list(probes["exc"].keys()),
+        "tasks": list(probes.get("tasks", {})),
         "hidden": enc_cfg.hidden,
     }, indent=2))
     return save_dir
@@ -88,16 +89,36 @@ class IndiaScorer:
         """Return a DataFrame: predicted rail (+ confidence), status, ETA, and the top-k
         exception risk scores per payment (uncalibrated balanced-probe rankings)."""
         import pandas as pd
+        from data.rails import IDENTIFIER_TYPES, eligible_rails
         e = self._embed(df)
-        rail_p = self.probes["rail"].predict_proba(e)
-        rail_cls = self.probes["rail"].classes_
+        rail_p = self.probes["rail"].predict_proba(e).copy()
+        rail_cls = list(self.probes["rail"].classes_)
+
+        # Hybrid routing: the learned probe gives PREFERENCE, but a payment can only go on
+        # an ELIGIBLE rail (cap/min/cross-border are hard rules the classifier doesn't know).
+        # Mask out ineligible rails per row so predictions are always valid.
+        amts = df["IntrBkSttlmAmt"].to_numpy(float)
+        idents = (df["identifier_type"].astype(str).to_numpy()
+                  if "identifier_type" in df.columns else np.array([None] * len(df)))
+        xb = ((df["Dbtr_Ctry"].to_numpy() != df["Cdtr_Ctry"].to_numpy())
+              if {"Dbtr_Ctry", "Cdtr_Ctry"} <= set(df.columns) else np.zeros(len(df), bool))
+        for i in range(len(df)):
+            ident = idents[i] if idents[i] in IDENTIFIER_TYPES else None
+            elig = eligible_rails(amts[i], ident, bool(xb[i]))
+            keep = np.array([c in elig for c in rail_cls])
+            if elig and keep.any():
+                rail_p[i, ~keep] = 0.0
+
+        rail_p = rail_p / rail_p.sum(1, keepdims=True).clip(min=1e-9)
         out = pd.DataFrame(index=df.index)
         if "payment_id" in df.columns:
             out["payment_id"] = df["payment_id"].to_numpy()
-        out["rail_pred"] = rail_cls[rail_p.argmax(1)]
+        out["rail_pred"] = np.array(rail_cls)[rail_p.argmax(1)]
         out["rail_conf"] = rail_p.max(1).round(3)
         out["status_pred"] = self.probes["status"].predict(e)
         out["eta_min_pred"] = np.clip(self.probes["eta"].predict(e), 0, None).round(1)
+        for tname, m in self.probes.get("tasks", {}).items():   # §5 heads (risk/geo/expense)
+            out[f"{tname}_pred"] = m.predict(e)
         risks = {n: m.predict_proba(e)[:, 1] for n, m in self.probes["exc"].items()}
         names = list(risks)
         R = np.vstack([risks[n] for n in names]).T if names else np.zeros((len(df), 0))
