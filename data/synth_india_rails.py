@@ -373,9 +373,12 @@ def _tasks():
 
 
 def build_schema(pay_df, accs) -> dict:
-    # identifier_type is a legitimate intake feature; rail / settlement_kind are NOT
-    # added to feature buckets (they are the routing label / its consequence).
-    buckets = {**COLUMN_BUCKETS, "core": COLUMN_BUCKETS["core"] + ["identifier_type"]}
+    # identifier_type is a legitimate intake feature; rail / settlement_kind / SttlmMtd are
+    # NOT features for routing (they are the label or 1:1 consequences of it - SttlmMtd is
+    # derived from the rail here, so keeping it would leak the label). Drop SttlmMtd from
+    # the core bucket and add identifier_type.
+    core = [c for c in COLUMN_BUCKETS["core"] if c != "SttlmMtd"] + ["identifier_type"]
+    buckets = {**COLUMN_BUCKETS, "core": core}
     return {
         "mode": "india_rails", "buckets": buckets,
         "label_column": "risk_label", "label_values": ["Low", "Medium", "High"],

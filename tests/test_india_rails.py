@@ -136,7 +136,8 @@ def test_rail_and_settlement_kind_not_in_feature_buckets():
     pay, _, accs = _small()
     s = build_schema(pay, accs)
     feats = sum(s["buckets"].values(), [])
-    assert "rail" not in feats and "settlement_kind" not in feats   # no label leakage
+    # rail is the label; settlement_kind and SttlmMtd are 1:1 consequences of it -> no leak.
+    assert "rail" not in feats and "settlement_kind" not in feats and "SttlmMtd" not in feats
     assert "identifier_type" in s["buckets"]["core"]                # but instrument is a feature
 
 

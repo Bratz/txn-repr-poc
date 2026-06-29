@@ -85,12 +85,37 @@ where the **amount** decides RTGS vs NEFT vs IMPS.
 
 ## Run it
 
+Generate, then train — **both run entirely on CPU** (no frozen-LLM path):
+
 ```bash
+# 1. generate (pure NumPy/pandas, CPU)
 python data/synth_india_rails.py --accounts 4000 --payments 60000 \
-    --out-prefix india_rails --schema-out column_schema_india.json
+    --out-prefix data/india_rails --schema-out data/column_schema_india.json
+
+# 2. train + score on held-out payments (CPU)
+python run_india.py --smoke        # tiny configs, plumbing-valid numbers
+python run_india.py                 # full configs (slower on CPU; better numbers)
 ```
 
-Emits `india_rails_payments.parquet`, `india_rails_events.parquet`, `column_schema_india.json`.
+Step 1 emits `india_rails_payments.parquet`, `india_rails_events.parquet`,
+`column_schema_india.json`. [`run_india.py`](../run_india.py) freezes the v1 encoder, then
+probes `f(payment)` for rail routing (vs a **tree baseline** on the raw visible features),
+the exception likelihoods, terminal status and ETA, and trains a rail-conditioned in-flight
+next-exception head. Writes `results_india.json`.
+
+### CPU smoke (illustrative, ~8k payments)
+
+| Signal | Result | Note |
+|--------|--------|------|
+| rail routing | probe acc **0.74** / tree acc **0.79** / majority 0.36 | both beat majority; tree edges the undertrained smoke encoder (expected on visible-feature tasks) |
+| limit_exceeded | PR-AUC **0.21** (≈1.6% prevalence) | clearly learnable |
+| ETA | MAE **272** vs mean baseline **415** min | the rail tiers are learnable |
+| status | below majority at smoke scale | balanced class weights trade accuracy for minority recall |
+
+These are **smoke-scale, plumbing-valid** numbers (1-epoch encoder), not headline results —
+full configs / more data / a GPU encoder pretrain improve them. The honest takeaway is the
+same as elsewhere in this POC: trees are strong on visible-feature tasks; the value of the
+backbone is representation reuse across many tasks, not beating a tree on synthetic labels.
 
 ## Fidelity & honesty
 
