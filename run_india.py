@@ -68,6 +68,30 @@ def _visible_features(pay):
     ]).astype(float)
 
 
+def train_probes(e, pay, schema, rows):
+    """Fit the deployable intake probes (encoder-based) on `rows` -> a picklable dict.
+
+    The tree baseline is a training-time diagnostic only (its raw-feature factorize codes
+    aren't stable across datasets), so it is NOT part of the saved model.
+    """
+    from sklearn.linear_model import LogisticRegression, Ridge
+    twin = schema["twin"]
+    probes = {
+        "rail": LogisticRegression(max_iter=2000, class_weight="balanced").fit(
+            e[rows], pay[twin["rail_column"]].to_numpy()[rows]),
+        "status": LogisticRegression(max_iter=1000, class_weight="balanced").fit(
+            e[rows], pay[twin["status_column"]].to_numpy()[rows]),
+        "eta": Ridge().fit(e[rows], pay[twin["eta_column"]].to_numpy(float)[rows]),
+        "exc": {}, "exc_columns": list(twin["exc_columns"]),
+    }
+    for c in twin["exc_columns"]:
+        y = pay[c].to_numpy()
+        if len(set(y[rows])) > 1:
+            probes["exc"][c.replace("exc_", "")] = LogisticRegression(
+                max_iter=1000, class_weight="balanced").fit(e[rows], y[rows])
+    return probes
+
+
 def intake_eval(e, pay, schema, tr, ev):
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.linear_model import LogisticRegression, Ridge
@@ -270,6 +294,8 @@ def main():
     ap.add_argument("--schema", default=str(ROOT / "data" / "column_schema_india.json"))
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--demo", action="store_true", help="print per-payment forecasts vs actuals")
+    ap.add_argument("--save", default=None, metavar="DIR",
+                    help="persist the frozen encoder + intake probes to DIR for serve_india.py")
     ap.add_argument("--inflight-epochs", type=int, default=4)
     ap.add_argument("--out", default=str(ROOT / "results_india.json"))
     args = ap.parse_args()
@@ -314,6 +340,16 @@ def main():
 
     if args.demo:
         demo(e_pay, pay, schema, tr, ev)
+
+    if args.save:
+        from encoders.quantizer import AdaptiveQuantizer
+        from serve_india import save_india_model
+        quantizer = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
+                                             pay[vocabs.ccy_col].to_numpy())
+        probes = train_probes(e_pay, pay, schema, tr)        # deployable probes (train split)
+        path = save_india_model(args.save, enc_cfg=enc_cfg, vocabs=vocabs, quantizer=quantizer,
+                                encoder=encoder, schema=schema, probes=probes)
+        print(f"[save] model -> {path}")
 
     inflight = run_inflight(evt, pay, tr_ids, ev_ids, schema, device, args.inflight_epochs, args.smoke)
     if "note" not in inflight:

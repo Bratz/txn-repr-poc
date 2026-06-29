@@ -103,6 +103,25 @@ probes `f(payment)` for rail routing (vs a **tree baseline** on the raw visible 
 the exception likelihoods, terminal status and ETA, and trains a rail-conditioned in-flight
 next-exception head. Writes `results_india.json`.
 
+### Persist & serve (no retraining)
+
+`run_india.py --save` writes a deployable bundle (frozen encoder + intake probes), and
+[`serve_india.py`](../serve_india.py) loads it and predicts on new payment rows without
+retraining — same convention as [`predict.py`](../predict.py) (the party table rides in the
+encoder `state_dict`; the assembler is rebuilt with `party_store=None`).
+
+```bash
+python run_india.py --save model_india           # train + persist (encoder.pt, probes.joblib)
+python serve_india.py --model-dir model_india \
+    --input data/india_rails_payments.parquet --out india_predictions.csv
+```
+
+Per-payment output: predicted `rail` (+ confidence), `status`, `eta_min`, and the top
+exception risk scores. The tree baseline is a **training-time diagnostic only** — its
+raw-feature factorize codes aren't stable across datasets, so it is not part of the saved
+model (the served predictor is the encoder + probes). A round-trip test asserts the reloaded
+model reproduces the in-memory predictions exactly.
+
 ### Full CPU run (20k payments, 3-epoch encoder)
 
 | Signal | Result | Note |

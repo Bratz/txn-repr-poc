@@ -26,6 +26,9 @@ results_india.json
 scored.csv
 # saved model checkpoints
 ckpt/
+# saved India serving model (serve_india.py) + sklearn probes
+model_india/
+*.joblib
 
 # secrets — never commit SSH keys / tokens
 sshkey
@@ -33,6 +36,9 @@ sshkey.pub
 *.pem
 id_rsa*
 *.bundle
+
+# scratch run logs
+*.log
 
 # python
 __pycache__/
