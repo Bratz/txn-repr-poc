@@ -3,7 +3,7 @@
 import numpy as np
 
 from data.synth_india_rails import IndiaConfig, build_dataset, build_schema
-from run_india import _visible_features, build_rail_examples, intake_eval
+from run_india import _visible_features, build_rail_examples, demo, intake_eval
 
 
 def _data():
@@ -33,6 +33,20 @@ def test_intake_eval_keys_and_baselines():
     assert r["tree_accuracy"] >= r["majority_baseline"]            # tree learns something
     assert "limit_exceeded" in out["exception_pr_auc"] and "sla_breach" in out["exception_pr_auc"]
     assert out["eta"]["mae_min"] >= 0 and out["eta"]["baseline_mae_min"] >= 0
+
+
+def test_demo_runs_and_clamps_eta():
+    pay, _, schema = _data()
+    rng = np.random.default_rng(1)
+    e = np.hstack([_visible_features(pay), rng.normal(size=(len(pay), 8))])
+    idx = rng.permutation(len(pay)); cut = int(len(idx) * 0.8)
+    lines = []
+    demo(e, pay, schema, idx[:cut], idx[cut:], log=lines.append)
+    text = "\n".join(lines)
+    assert "per-payment forecast" in text and "routing eligibility" in text
+    # ETA is clamped to >= 0 in every forecast line
+    etas = [int(s.split("ETA:")[1].split("min")[0]) for s in lines if "ETA:" in s]
+    assert etas and all(v >= 0 for v in etas)
 
 
 def test_build_rail_examples_conditions_on_rail():

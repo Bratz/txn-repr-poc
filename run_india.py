@@ -120,6 +120,64 @@ def intake_eval(e, pay, schema, tr, ev):
 
 
 # --------------------------------------------------------------------------- #
+# DEMO - per-payment forecast vs ground truth (held-out)
+# --------------------------------------------------------------------------- #
+
+def demo(e, pay, schema, tr, ev, log=print):
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.linear_model import LogisticRegression, Ridge
+    from data.rails import eligible_rails
+    twin = schema["twin"]
+    yr = pay[twin["rail_column"]].to_numpy()
+
+    # train the intake models once on the train split
+    rail = LogisticRegression(max_iter=2000, class_weight="balanced").fit(e[tr], yr[tr])
+    Xt = _visible_features(pay)
+    tree = HistGradientBoostingClassifier(max_iter=200).fit(Xt[tr], yr[tr])
+    status = LogisticRegression(max_iter=1000, class_weight="balanced").fit(
+        e[tr], pay[twin["status_column"]].to_numpy()[tr])
+    eta = Ridge().fit(e[tr], pay[twin["eta_column"]].to_numpy(float)[tr])
+    exc_models = {}
+    for c in twin["exc_columns"]:
+        y = pay[c].to_numpy()
+        if len(set(y[tr])) > 1:
+            exc_models[c.replace("exc_", "")] = LogisticRegression(
+                max_iter=1000, class_weight="balanced").fit(e[tr], y[tr])
+
+    # one held-out payment per rail
+    rails_ev = yr[ev]
+    picks = [ev[np.where(rails_ev == r)[0][0]] for r in twin["rails"]
+             if (rails_ev == r).any()]
+
+    log("\n=== per-payment forecast on held-out payments (predicted | ACTUAL) ===")
+    log("(exception scores are uncalibrated balanced-probe risk rankings, not probabilities)")
+    for i in picks:
+        row = pay.iloc[i]
+        xi = e[i:i + 1]
+        pr = rail.predict(xi)[0]; conf = float(rail.predict_proba(xi)[0].max())
+        ptree = tree.predict(Xt[i:i + 1])[0]
+        pst = status.predict(xi)[0]
+        peta = max(0.0, float(eta.predict(xi)[0]))          # settle time can't be negative
+        top = sorted(((n, float(m.predict_proba(xi)[0, 1])) for n, m in exc_models.items()),
+                     key=lambda kv: -kv[1])[:3]
+        actual_exc = [c.replace("exc_", "") for c in twin["exc_columns"] if row[c] == 1] or ["none"]
+        xb = "x-border" if row["Dbtr_Ctry"] != row["Cdtr_Ctry"] else "domestic"
+        log(f"\npayment {int(row['payment_id'])}  {row['IntrBkSttlmAmt']:,.0f} {row['Ccy']}  "
+            f"{xb}  via {row['identifier_type']}")
+        log(f"  predicted rail: {pr} ({conf:.2f})  [tree: {ptree}]   "
+            f"status: {pst}   ETA: {peta:.0f} min")
+        log(f"  top exception risks: " + ", ".join(f"{n} {p:.2f}" for n, p in top))
+        log(f"  ACTUAL: rail {row['rail']} | status {row['terminal_status']} | "
+            f"exceptions {actual_exc} | ETA {row['time_to_settle_min']:.0f} min")
+
+    # deterministic routing-rule sanity table (data/rails.eligible_rails)
+    log("\n=== routing eligibility by amount (INR) / identifier ===")
+    for amt in (500, 50_000, 150_000, 300_000, 800_000):
+        log(f"  Rs {amt:>9,}  domestic -> {eligible_rails(amt)}   "
+            f"x-border -> {eligible_rails(amt, xborder=True)}")
+
+
+# --------------------------------------------------------------------------- #
 # IN-FLIGHT - rail-conditioned next-step exception
 # --------------------------------------------------------------------------- #
 
@@ -211,6 +269,7 @@ def main():
     ap.add_argument("--events", default=str(ROOT / "data" / "india_rails_events.parquet"))
     ap.add_argument("--schema", default=str(ROOT / "data" / "column_schema_india.json"))
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--demo", action="store_true", help="print per-payment forecasts vs actuals")
     ap.add_argument("--inflight-epochs", type=int, default=4)
     ap.add_argument("--out", default=str(ROOT / "results_india.json"))
     args = ap.parse_args()
@@ -252,6 +311,9 @@ def main():
     print(f"[intake] status acc {s['accuracy']:.3f} (majority {s['majority_baseline']:.3f}) "
           f"macroF1 {s['macro_f1']:.3f} | ETA MAE {intake['eta']['mae_min']:.1f} "
           f"vs baseline {intake['eta']['baseline_mae_min']:.1f} min")
+
+    if args.demo:
+        demo(e_pay, pay, schema, tr, ev)
 
     inflight = run_inflight(evt, pay, tr_ids, ev_ids, schema, device, args.inflight_epochs, args.smoke)
     if "note" not in inflight:
