@@ -103,6 +103,29 @@ probes `f(payment)` for rail routing (vs a **tree baseline** on the raw visible 
 the exception likelihoods, terminal status and ETA, and trains a rail-conditioned in-flight
 next-exception head. Writes `results_india.json`.
 
+### Layer-1: score raw ISO 20022 pacs.008 XML
+
+[`data/iso20022_pacs008.py`](../data/iso20022_pacs008.py) projects a real pacs.008
+(`FIToFICstmrCdtTrf`) message into the feature row the encoder consumes — the live inverse of
+the generator's `project_to_pacs008`. `serve_india.py` accepts an `.xml` input directly:
+
+```bash
+python serve_india.py --model-dir model_india --input data/sample_pacs008.xml
+```
+
+On the bundled [`sample_pacs008.xml`](../data/sample_pacs008.xml) (a 2-transaction message) the
+full live path runs end to end: the cross-border $125k leg → **SWIFT** (≈1700 min ETA tier),
+the domestic ₹45k leg → **NEFT**.
+
+**Honest gaps** (parsed vs not-in-the-message):
+- Parsed directly: amount + currency, settlement date, debtor/creditor names, countries,
+  account ids (IBAN or `Othr/Id`), ultimate-party ids, `SttlmMtd`. Namespace-agnostic
+  (any pacs.008.001.xx version); one row per `CdtTrfTxInf`.
+- **Not in pacs.008** → defaulted or enriched: `industry`/`sub_industry` are party-master
+  enrichment attributes (default `Unknown`, or pass `enrich={acct_id: {...}}`); `identifier_type`
+  is rail-specific (UPI/IMPS proxies aren't standard pacs.008) → derived as `BIC_IBAN` for
+  IBAN/cross-border, else `ACCT_IFSC`.
+
 ### Persist & serve (no retraining)
 
 `run_india.py --save` writes a deployable bundle (frozen encoder + intake probes), and

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>MSG-20260629-0001</MsgId>
+      <CreDtTm>2026-06-29T09:30:00</CreDtTm>
+      <NbOfTxs>2</NbOfTxs>
+      <SttlmInf>
+        <SttlmMtd>COVE</SttlmMtd>
+      </SttlmInf>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-0001</EndToEndId>
+        <TxId>TX-0001</TxId>
+        <UETR>b1f2c3d4-0001-4a2b-8c3d-000000000001</UETR>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="USD">125000.00</IntrBkSttlmAmt>
+      <IntrBkSttlmDt>2026-06-29</IntrBkSttlmDt>
+      <ChrgBr>SHAR</ChrgBr>
+      <Dbtr>
+        <Nm>Meridian Pte Trading</Nm>
+        <PstlAdr><Ctry>IN</Ctry></PstlAdr>
+        <Id><OrgId><Othr><Id>PARENT-IN-77</Id></Othr></OrgId></Id>
+      </Dbtr>
+      <DbtrAcct><Id><Othr><Id>IN9988776655</Id></Othr></Id></DbtrAcct>
+      <DbtrAgt><FinInstnId><BICFI>HDFCINBBXXX</BICFI></FinInstnId></DbtrAgt>
+      <CdtrAgt><FinInstnId><BICFI>CHASUS33XXX</BICFI></FinInstnId></CdtrAgt>
+      <Cdtr>
+        <Nm>Northwind LLC Holdings</Nm>
+        <PstlAdr><Ctry>US</Ctry></PstlAdr>
+        <Id><OrgId><Othr><Id>PARENT-US-12</Id></Othr></OrgId></Id>
+      </Cdtr>
+      <CdtrAcct><Id><IBAN>US64SVBKUS6S3300958879</IBAN></Id></CdtrAcct>
+      <UltmtCdtr>
+        <Nm>Northwind LLC Holdings</Nm>
+        <Id><OrgId><Othr><Id>PARENT-US-12</Id></Othr></OrgId></Id>
+      </UltmtCdtr>
+    </CdtTrfTxInf>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>E2E-0002</EndToEndId>
+        <TxId>TX-0002</TxId>
+        <UETR>b1f2c3d4-0002-4a2b-8c3d-000000000002</UETR>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="INR">45000.00</IntrBkSttlmAmt>
+      <IntrBkSttlmDt>2026-06-29</IntrBkSttlmDt>
+      <ChrgBr>SHAR</ChrgBr>
+      <Dbtr>
+        <Nm>Granite Inc Services</Nm>
+        <PstlAdr><Ctry>IN</Ctry></PstlAdr>
+        <Id><OrgId><Othr><Id>PARENT-IN-31</Id></Othr></OrgId></Id>
+      </Dbtr>
+      <DbtrAcct><Id><Othr><Id>IN1122334455</Id></Othr></Id></DbtrAcct>
+      <Cdtr>
+        <Nm>Apex Ltd Capital</Nm>
+        <PstlAdr><Ctry>IN</Ctry></PstlAdr>
+        <Id><OrgId><Othr><Id>PARENT-IN-09</Id></Othr></OrgId></Id>
+      </Cdtr>
+      <CdtrAcct><Id><Othr><Id>IN5566778899</Id></Othr></Id></CdtrAcct>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

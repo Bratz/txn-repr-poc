@@ -150,7 +150,13 @@ def main():
 
     scorer = load_india_model(args.model_dir)
     p = Path(args.input)
-    df = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
+    if p.suffix == ".xml":
+        from data.iso20022_pacs008 import parse_pacs008_frame
+        df = parse_pacs008_frame(p)                          # raw pacs.008 -> projected rows
+    elif p.suffix == ".parquet":
+        df = pd.read_parquet(p)
+    else:
+        df = pd.read_csv(p)
     if args.limit:
         df = df.head(args.limit)
     res = scorer.predict(df)
