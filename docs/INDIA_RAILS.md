@@ -103,19 +103,23 @@ probes `f(payment)` for rail routing (vs a **tree baseline** on the raw visible 
 the exception likelihoods, terminal status and ETA, and trains a rail-conditioned in-flight
 next-exception head. Writes `results_india.json`.
 
-### CPU smoke (illustrative, ~8k payments)
+### Full CPU run (20k payments, 3-epoch encoder)
 
 | Signal | Result | Note |
 |--------|--------|------|
-| rail routing | probe acc **0.74** / tree acc **0.79** / majority 0.36 | both beat majority; tree edges the undertrained smoke encoder (expected on visible-feature tasks) |
-| limit_exceeded | PR-AUC **0.21** (≈1.6% prevalence) | clearly learnable |
-| ETA | MAE **272** vs mean baseline **415** min | the rail tiers are learnable |
-| status | below majority at smoke scale | balanced class weights trade accuracy for minority recall |
+| rail routing | probe acc **0.75** / tree acc **0.80** / majority 0.39 | both beat majority; the tree still edges the probe (visible-feature task) |
+| limit_exceeded | PR-AUC **0.55** (≈1.6% prevalence) | strongly learnable (deterministic cap rule) |
+| ETA | MAE **207** vs mean baseline **400** min | rail tiers learned; ~halves the error |
+| other exceptions | no_route **0.10**, below_min **0.08**, sanctions **0.07** | weaker / sparse signal |
+| status | acc **0.29** (majority 0.71), macro-F1 **0.23** | STP dominates; the balanced probe trades accuracy for recall and doesn't beat majority |
+| in-flight next-exception | macro-F1 **0.11**, next-any PR-AUC **0.21** (prev 0.06) | beats prevalence; sparse |
 
-These are **smoke-scale, plumbing-valid** numbers (1-epoch encoder), not headline results —
-full configs / more data / a GPU encoder pretrain improve them. The honest takeaway is the
-same as elsewhere in this POC: trees are strong on visible-feature tasks; the value of the
-backbone is representation reuse across many tasks, not beating a tree on synthetic labels.
+(A 1-epoch `--smoke` run gives similar-shape but weaker numbers — plumbing check only.)
+The honest takeaway is the same as elsewhere in this POC: trees are strong on visible-feature
+tasks; some labels (deterministic caps, rail ETA tiers) are very learnable from the
+representation while the dominant-majority status label and sparse exceptions are not. The
+value of the backbone is representation reuse across many tasks, not beating a tree on these
+synthetic labels.
 
 ## Fidelity & honesty
 
