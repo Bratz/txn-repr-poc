@@ -180,12 +180,12 @@ model reproduces the in-memory predictions exactly.
 
 | Signal | Result | Note |
 |--------|--------|------|
-| rail routing | probe acc **0.75** / tree acc **0.80** / majority 0.39 | both beat majority; the tree still edges the probe (visible-feature task) |
+| rail routing | 5-class probe **0.75** · **domestic-only 0.70** · clean (mis-routed excl.) **0.76** · tree **0.80** · majority 0.39 | the 5-class number is **inflated** by the trivially-separable SWIFT class (foreign Ccy/country); **domestic-only 0.70** is the honest hard slice (RTGS/NEFT/IMPS); tree still leads |
 | limit_exceeded | PR-AUC **0.55** (≈1.6% prevalence) | strongly learnable (deterministic cap rule) |
 | ETA | MAE **207** vs mean baseline **400** min | rail tiers learned; ~halves the error |
 | other exceptions | no_route **0.10**, below_min **0.08**, sanctions **0.07** | weaker / sparse signal |
 | status | acc **0.29** (majority 0.71), macro-F1 **0.23** | STP dominates; the balanced probe trades accuracy for recall and doesn't beat majority |
-| in-flight next-exception | macro-F1 **0.11**, next-any PR-AUC **0.21** (prev 0.06) | beats prevalence; sparse |
+| in-flight next-exception | macro-F1 **0.11**, next-any PR-AUC **0.23** (prev 0.06) | beats prevalence; sparse |
 
 (A 1-epoch `--smoke` run gives similar-shape but weaker numbers — plumbing check only.)
 The honest takeaway is the same as elsewhere in this POC: trees are strong on visible-feature
