@@ -82,6 +82,12 @@ class IndiaScorer:
 
     @torch.no_grad()
     def _embed(self, df):
+        # warn on serve-time vocab drift (e.g. an id column trained int but served float):
+        # a high UNK rate means the representation has quietly degraded to OOV embeddings.
+        hot = {c: round(r, 3) for c, r in self.vocabs.unk_rate(df).items() if r > 0.5}
+        if hot:
+            import warnings
+            warnings.warn(f"high UNK rate on {hot} — possible dtype/vocab drift", stacklevel=2)
         full = self.vocabs.encode(df)
         return embed_all_rows(self.encoder, full, len(df), self.device).cpu().numpy()
 

@@ -5,8 +5,8 @@ frozen backbone, and exercise the live pacs.008 path on the very same cases.
 Tasks covered (predicted vs the rule-true golden label):
   §5 single-record : risk, geography, expense
   India rail       : rail routing, terminal status, ETA, exception risks
-  India sequence   : in-flight next-step exception (on the golden event log)
-  (recurrence is multi-record / group-level -> not part of this per-payment bench)
+  (in-flight next-step exception is a sequence task, evaluated in run_india/run_twin, not on
+   these 14 cases; recurrence is multi-record / group-level -> also out of this per-payment bench)
 
 It also writes the golden set to pacs.008 XML, re-parses it through Layer-1, and re-scores -
 confirming the message-level path agrees with direct scoring on the message-native fields.
@@ -25,7 +25,7 @@ import torch
 from data.golden_cases import build_golden
 from data.iso20022_pacs008 import parse_pacs008_frame, write_pacs008
 from data.synth_india_rails import IndiaConfig, build_dataset, build_schema
-from run_india import run_inflight, train_probes
+from run_india import train_probes
 from run_seq import embed_all_rows
 from serve_india import IndiaScorer
 
@@ -55,7 +55,7 @@ def _train_backbone(args, device):
     encoder.freeze()
     e = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()
     probes = train_probes(e, pay, schema, np.arange(len(pay)))
-    return encoder, vocabs, probes, schema, pay, evt
+    return encoder, vocabs, probes, schema
 
 
 def _agree(res, gold):
@@ -75,19 +75,6 @@ def _agree(res, gold):
     print(f"  {'ETA':10s} MAE {mae:.1f} min")
 
 
-def _inflight_on_golden(train_evt, train_pay, gevt, gpay, schema, device, smoke):
-    """Train in-flight on the training events; evaluate on the golden event prefixes."""
-    OFF = 1_000_000
-    g2_pay = gpay.copy(); g2_pay["payment_id"] = g2_pay["payment_id"] + OFF
-    g2_evt = gevt.copy(); g2_evt["payment_id"] = g2_evt["payment_id"] + OFF
-    cols = [c for c in train_pay.columns if c in g2_pay.columns]
-    comb_pay = pd.concat([train_pay[cols], g2_pay[cols]], ignore_index=True)
-    comb_evt = pd.concat([train_evt, g2_evt], ignore_index=True)
-    tr_ids = set(train_pay["payment_id"]); ev_ids = set(g2_pay["payment_id"])
-    return run_inflight(comb_evt, comb_pay, tr_ids, ev_ids, schema, device,
-                        epochs=1 if smoke else 4, smoke=smoke, log=lambda *_: None)
-
-
 def main():
     ap = argparse.ArgumentParser(description="Golden cross-task bench (CPU-friendly)")
     ap.add_argument("--smoke", action="store_true")
@@ -97,7 +84,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device={device}  mode={'smoke' if args.smoke else 'full'}")
 
-    encoder, vocabs, probes, schema, train_pay, train_evt = _train_backbone(args, device)
+    encoder, vocabs, probes, schema = _train_backbone(args, device)
     scorer = IndiaScorer(encoder, vocabs, probes, device)
 
     gpay, gevt = build_golden()
@@ -120,12 +107,6 @@ def main():
     print(f"\n[pacs.008 round-trip] golden -> XML -> Layer-1 -> score: "
           f"rail predictions match direct {rail_match:.2f} "
           f"(message-native fields preserved; industry/identifier re-derived)")
-
-    inflight = _inflight_on_golden(train_evt, train_pay, gevt, gpay, schema, device, args.smoke)
-    if "note" not in inflight:
-        print(f"[in-flight] golden next-exception macroF1 {inflight['next_exception_macro_f1']:.3f} | "
-              f"next-any PR-AUC {inflight['next_any_exception_pr_auc']} "
-              f"(prev {inflight['next_any_exception_prevalence']:.2f})")
 
 
 if __name__ == "__main__":

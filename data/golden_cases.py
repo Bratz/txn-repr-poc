@@ -88,7 +88,7 @@ CASES = [
 ]
 
 
-def _simulate(rail, src, dest, amount, target, max_seeds=800):
+def _simulate(rail, src, dest, amount, target, max_seeds=60):
     last = None
     for s in range(max_seeds):
         rng = np.random.default_rng(s)
@@ -96,7 +96,11 @@ def _simulate(rail, src, dest, amount, target, max_seeds=800):
         last = (ev, exc, status, secs, s)
         if target is None or target(exc, status):
             return last
-    return last                                                 # best effort if not hit
+    if target is not None:                                      # don't mislabel silently
+        import warnings
+        warnings.warn(f"golden: target not hit for rail={rail} amount={amount} "
+                      f"in {max_seeds} seeds; using best-effort outcome")
+    return last
 
 
 def build_golden():
