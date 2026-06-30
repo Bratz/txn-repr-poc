@@ -2,6 +2,8 @@
 
 import numpy as np
 import pandas as pd
+import pytest
+import torch
 
 from encoders.coerce import canon_categorical
 from encoders.column_assembler import build_vocabs
@@ -115,3 +117,46 @@ def test_rail_routing_reports_per_class_and_domestic():
     rr = intake_eval(e, pay, schema, idx[:cut], idx[cut:])["rail_routing"]
     assert {"per_class", "domestic_probe_accuracy", "clean_probe_accuracy"} <= set(rr)
     assert "SWIFT" in rr["per_class"] and "RTGS" in rr["per_class"]
+
+
+# --- backlog: numerical / training robustness ---------------------------------- #
+
+def test_quantizer_rejects_nonfinite():
+    from encoders.quantizer import AdaptiveQuantizer
+    with pytest.raises(ValueError):
+        AdaptiveQuantizer(condition_on_currency=False).fit([1.0, np.nan, 3.0])
+    q = AdaptiveQuantizer(condition_on_currency=False).fit([1.0, 2.0, 3.0])
+    with pytest.raises(ValueError):
+        q.transform([np.inf])
+
+
+def test_triplet_loss_no_nan_grad_on_identical_embeddings():
+    from encoder.tabular_encoder import batch_hard_triplet_loss
+    emb = torch.zeros(4, 8, requires_grad=True)            # all identical -> d == 0
+    loss = batch_hard_triplet_loss(emb, torch.tensor([0, 0, 1, 1]))
+    loss.backward()
+    assert torch.isfinite(loss) and torch.isfinite(emb.grad).all()   # no NaN at d=0
+
+
+def test_history_pretrain_asserts_e_all_alignment():
+    from encoder.history_encoder import HistoryConfig, HistoryEncoder, pretrain
+    cfg = HistoryConfig(hidden=16, layers=1, heads=2, ff_mult=2, epochs=1)
+    hist = HistoryEncoder(recon_fields={"step": 4}, config=cfg)
+    e_all = torch.randn(10, 16)
+    targets = {"step": torch.zeros(8, dtype=torch.long)}   # misaligned (8 != 10)
+    with pytest.raises(AssertionError):
+        pretrain(hist, e_all, targets, [], cfg)
+
+
+def test_twin_intake_eval_keys_and_baselines():
+    from data.synth_workflow import WfConfig, build_schema, build_workflow_dataset
+    from run_twin import intake_eval as twin_intake
+    pay, _, accs = build_workflow_dataset(WfConfig(num_accounts=120, num_payments=1500, seed=1))
+    schema = build_schema(pay, accs)
+    rng = np.random.default_rng(0)
+    e = rng.normal(size=(len(pay), 12))
+    idx = rng.permutation(len(pay)); cut = int(len(idx) * 0.8)
+    out = twin_intake(e, pay, schema["twin"], idx[:cut], idx[cut:])
+    assert {"exception_pr_auc", "status_accuracy", "status_majority_baseline",
+            "eta_mae_min", "eta_baseline_mae_min"} <= set(out)
+    assert out["eta_mae_min"] >= 0 and 0 <= out["status_majority_baseline"] <= 1

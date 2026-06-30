@@ -27,12 +27,15 @@ hyperparameters or unfreeze anything (fidelity preserved).
   missing-bundle/input errors.
 - [x] P2 freeze() blocking later `.train()` — done via `MultimodalDecoder.train()` override.
 - [x] P2 serve round-trip reuses same probes (tautology) — fixed to compare a 2nd loaded scorer.
-- [ ] P1 held-out leak: assert `e_all` aligned to reset-index df (`history_encoder.pretrain`).
-- [ ] P1 quantizer: reject non-finite amounts.
-- [ ] P1 (latent) decoder all-ones attention/target masks; dead prefix-pad logit code.
-- [ ] P2 tests: intake_eval/run_inflight (twin+india), legacy ckpt load,
-  run_gpu tiny/single-class split.
-- [ ] P2 cdist zero-distance eps; CoLES B<2 no-op.
+- [x] P1 held-out leak: `history_encoder.pretrain` now asserts `e_all`/targets aligned.
+- [x] P1 quantizer: rejects non-finite amounts (fit + transform).
+- [x] P1 (latent) decoder: documented the all-rows-equal-length (no-pad) mask invariant;
+  replaced the dead prefix-pad branch with `assert logits.shape[1] == z.shape[1]`.
+- [x] P2 cdist zero-distance: triplet loss uses stable squared-distance + eps sqrt.
+- [x] P2 CoLES B<2: composite_loss skips the triplet term for singleton batches.
+- [x] P2 tests: twin intake_eval covered (+ quantizer / triplet / alignment-assert tests).
+- [ ] P2 (minor, deferred): run_india run_inflight direct test; legacy single-task ckpt load;
+  run_gpu tiny/single-class split path. Low-risk, exercised indirectly.
 
 ## Review (filled on completion)
 

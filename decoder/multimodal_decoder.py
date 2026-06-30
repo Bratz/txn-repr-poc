@@ -289,6 +289,10 @@ class MultimodalDecoder(nn.Module):
         parts += [instr, task]
 
         z = torch.cat(parts, dim=1)                                     # (B,S_z,Dllm)
+        # All rows in a batch have identical length here (fixed adapter-token count +
+        # fixed-width instruction_ids), so there is no intra-batch padding — an all-ones
+        # attention mask is correct. If ragged instructions are ever batched, a real
+        # per-row padding mask must be threaded instead.
         mask = torch.ones(z.shape[0], z.shape[1], device=z.device)
         return z, mask
 
@@ -333,9 +337,11 @@ class MultimodalDecoder(nn.Module):
         try:
             z, z_mask = self.build_inputs(batch, task_ids, instruction_ids)
             logits = self.llm.forward_embeds(z, z_mask, self._prefixes(z.shape[0]))
-            # the last z position predicts the first response token
-            pad = logits.shape[1] - z.shape[1]
-            next_logits = logits[:, pad + z.shape[1] - 1, :]      # (B, vocab)
+            # both backends return logits of length S_z (the φ prefix widens the KV cache,
+            # not the query), so there is no prefix offset — the last z position predicts
+            # the first response token.
+            assert logits.shape[1] == z.shape[1], "unexpected LLM prefix offset in logits"
+            next_logits = logits[:, z.shape[1] - 1, :]            # (B, vocab)
             label_ids = torch.as_tensor(label_token_ids, device=z.device)
             return F.softmax(next_logits.index_select(1, label_ids), dim=1)
         finally:

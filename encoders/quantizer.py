@@ -131,6 +131,8 @@ class AdaptiveQuantizer:
         amt = np.asarray(amounts, dtype=np.float64).reshape(-1)
         if amt.size == 0:
             raise ValueError("cannot fit on empty amounts")
+        if not np.isfinite(amt).all():
+            raise ValueError("amounts must be finite (no NaN/inf) to fit the quantizer")
 
         # Always build a global fallback grid (used for unseen currencies and
         # when condition_on_currency is False).
@@ -158,6 +160,9 @@ class AdaptiveQuantizer:
         if not self._fitted:
             raise RuntimeError("AdaptiveQuantizer must be fit before transform")
         amt = np.asarray(amounts, dtype=np.float64).reshape(-1)
+        if not np.isfinite(amt).all():
+            # searchsorted would silently bin NaN/inf into the top level — reject instead.
+            raise ValueError("amounts must be finite (no NaN/inf) to quantize")
 
         if not self.condition_on_currency:
             return _assign_nearest(self.grids_[_GLOBAL_KEY], amt)
