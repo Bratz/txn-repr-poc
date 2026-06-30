@@ -3,7 +3,16 @@
 import numpy as np
 import pandas as pd
 
-from data.sequence_assembly import assemble_sequences, collate, split_by_actor
+from data.sequence_assembly import (
+    assemble_sequences, collate, split_by_actor, velocity_labels,
+)
+
+
+def test_velocity_labels_flag_bursts_only():
+    steady = {"dt": np.array([0, 10, 10, 10, 10, 10, 10, 10], np.float32)}   # constant cadence
+    burst = {"dt": np.array([0, 10, 10, 10, 10, 1, 1, 1], np.float32)}        # recent speed-up
+    short = {"dt": np.array([0, 1, 1], np.float32)}                           # too short -> 0
+    assert velocity_labels([steady, burst, short]).tolist() == [0, 1, 0]
 
 
 def test_assemble_orders_and_derives_time(sample_df):

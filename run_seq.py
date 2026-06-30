@@ -281,6 +281,22 @@ def main():
         print(f"  LLM on h_USR    PR-AUC {b_pr:.3f}   -> C5 gap {c['C5_llm_gap_pp']:+.1f} pp  "
               f"{'DROP LLM' if c['C5_drop_llm'] else 'keep LLM'}")
 
+        # --- velocity head: single-entity inter-arrival burst (timing-only signal) ----- #
+        from data.sequence_assembly import velocity_labels
+        yv_tr, yv_ev = velocity_labels(train_seqs), velocity_labels(eval_seqs)
+        if len(set(yv_tr.tolist())) > 1 and len(set(yv_ev.tolist())) > 1:
+            v_seq = probe_pr(h_tr.cpu().numpy(), yv_tr, h_ev.cpu().numpy(), yv_ev)   # time-aware
+            v_pool = probe_pr(pooled_features(e_all, train_seqs), yv_tr,
+                              pooled_features(e_all, eval_seqs), yv_ev)              # order-blind
+            results["velocity"] = {"pr_auc_timeaware": v_seq, "pr_auc_pooled": v_pool,
+                                   "lift_pp": (v_seq - v_pool) * 100,
+                                   "prevalence": float(yv_ev.mean())}
+            print(f"  velocity burst  PR-AUC {v_seq:.3f} time-aware vs {v_pool:.3f} pooled  "
+                  f"-> lift {(v_seq - v_pool) * 100:+.1f} pp  (prev {yv_ev.mean():.2f})")
+        else:
+            results["velocity"] = {"note": "degenerate velocity label at this scale"}
+            print("  velocity burst  degenerate label at this scale (raise --limit)")
+
     Path(args.out).write_text(json.dumps(results, indent=2, default=float))
     print(f"\nwrote {args.out}")
 

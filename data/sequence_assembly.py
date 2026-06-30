@@ -64,6 +64,23 @@ def split_by_actor(seqs: list[dict], frac_eval: float = 0.2, seed: int = 0):
     return train, ev
 
 
+def velocity_labels(seqs: list[dict], k: int = 3, ratio: float = 0.5,
+                    min_events: int = 6) -> np.ndarray:
+    """1 if an actor's recent inter-arrivals BURST: mean of the last k gaps <= ratio x the
+    median of the earlier gaps (i.e. >= 2x faster). A pure timing signal — order-blind pooled
+    features can't see it, the time-aware history encoder can.
+    ponytail: transparent rule over s['dt'] (no new data); short histories -> 0 (no evidence).
+    """
+    out = []
+    for s in seqs:
+        g = s["dt"][1:]                       # inter-arrival gaps (dt[0] is the leading 0)
+        if len(g) < min_events:
+            out.append(0); continue
+        recent, base = float(np.mean(g[-k:])), float(np.median(g[:-k]))
+        out.append(int(base > 0 and recent <= ratio * base))
+    return np.asarray(out)
+
+
 def collate(batch_seqs: list[dict]) -> dict:
     """Pad a list of sequences to the batch max length; build the pad mask (True = pad)."""
     B = len(batch_seqs)
