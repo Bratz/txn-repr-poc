@@ -272,23 +272,31 @@ def party_roles_from_schema(schema: dict) -> dict[str, dict]:
 
 
 def build_field_vocabs(df, roles: dict) -> dict[str, dict]:
-    """Shared {attr: {value: idx}} over the union of all roles' columns."""
+    """Shared {attr: {value: idx}} over the union of all roles' columns (canonical keys)."""
+    from .coerce import canon_categorical
     vocabs: dict[str, dict] = {a: {} for a in PARTY_STRUCT_ATTRS}
     for role in roles.values():
         for attr, col in role["attrs"].items():
-            for v in df[col].astype(str).unique():
+            for v in canon_categorical(df[col]).unique():
                 if v not in vocabs[attr]:
                     vocabs[attr][v] = len(vocabs[attr])
     return vocabs
 
 
 def encode_role_parties(df, role: dict, vocabs: dict):
-    """Dedup a role's parties by key → (keys list, field_ids LongTensor)."""
+    """Dedup a role's parties by key → (keys list, field_ids LongTensor).
+
+    A value not seen at build (a new country/industry at serve time) maps to the per-field
+    [MASK] row (index = len(vocab)) — a graceful UNK, instead of NaN → out-of-bounds index.
+    Keys are canonicalised so int/float/str forms of an id agree with the store lookup.
+    """
+    from .coerce import canon_categorical
     cols = {a: role["attrs"][a] for a in PARTY_STRUCT_ATTRS}
     sub = df[[role["key"], *cols.values()]].drop_duplicates(subset=role["key"])
-    keys = sub[role["key"]].tolist()
+    keys = canon_categorical(sub[role["key"]]).tolist()
     ids = np.stack(
-        [sub[cols[a]].astype(str).map(vocabs[a]).to_numpy() for a in PARTY_STRUCT_ATTRS],
+        [canon_categorical(sub[cols[a]]).map(vocabs[a]).fillna(len(vocabs[a])).to_numpy()
+         for a in PARTY_STRUCT_ATTRS],
         axis=1,
     ).astype(np.int64)
     return keys, torch.from_numpy(ids)

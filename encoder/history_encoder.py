@@ -98,10 +98,17 @@ class HistoryEncoder(nn.Module):
 
     @torch.no_grad()
     def encode(self, e_seq, batch, static=None) -> torch.Tensor:
-        """Entity representation h_USR with no masking (downstream / eval)."""
+        """Entity representation h_USR with no masking (downstream / eval).
+
+        Saves/restores the module's training mode so calling encode() mid-training does not
+        silently leave the encoder in eval (dropout off) for the rest of the loop."""
+        was_training = self.training
         self.eval()
-        h_usr, _ = self.forward(e_seq, batch, static, event_mask=None)
-        return h_usr
+        try:
+            h_usr, _ = self.forward(e_seq, batch, static, event_mask=None)
+            return h_usr
+        finally:
+            self.train(was_training)
 
     # -- objective -------------------------------------------------------- #
     def sample_event_mask(self, pad_mask: torch.Tensor) -> torch.Tensor:

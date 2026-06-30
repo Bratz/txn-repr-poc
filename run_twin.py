@@ -232,6 +232,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "results_twin.json"))
     args = ap.parse_args()
 
+    np.random.seed(0)                               # reproducible in-flight training
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device={device}  mode={'smoke' if args.smoke else 'full'}")
     pay, evt, schema = load_twin(args)

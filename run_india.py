@@ -115,6 +115,13 @@ def intake_eval(e, pay, schema, tr, ev):
     out = {}
 
     # --- rail routing (multiclass): frozen-rep probe vs tree on raw visible features ---
+    # NB: the SWIFT class is trivially separable (foreign Ccy/country leak it) and the
+    # over-cap/below-min injected rows carry the *attempted* (ineligible) rail as label, so
+    # the headline 5-class accuracy is inflated. We additionally report PER-CLASS metrics, a
+    # DOMESTIC-only accuracy (the genuinely non-trivial RTGS/NEFT/IMPS slice), and a
+    # mis-routed-excluded ("clean") accuracy so the inflation is visible, not hidden.
+    from sklearn.metrics import precision_recall_fscore_support
+    from data.rails import DOMESTIC_RAILS
     yr = pay[twin["rail_column"]].to_numpy()
     probe = LogisticRegression(max_iter=2000, class_weight="balanced").fit(e[tr], yr[tr])
     ppred = probe.predict(e[ev])
@@ -122,12 +129,27 @@ def intake_eval(e, pay, schema, tr, ev):
     tree = HistGradientBoostingClassifier(max_iter=200).fit(Xt[tr], yr[tr])
     tpred = tree.predict(Xt[ev])
     maj = Counter(yr[tr]).most_common(1)[0][0]
+
+    labels = sorted(set(yr[tr]))
+    prec, rec, f1c, sup = precision_recall_fscore_support(
+        yr[ev], ppred, labels=labels, average=None, zero_division=0)
+    per_class = {lab: {"precision": float(prec[i]), "recall": float(rec[i]),
+                       "f1": float(f1c[i]), "support": int(sup[i])}
+                 for i, lab in enumerate(labels)}
+    dom = np.isin(yr[ev], list(DOMESTIC_RAILS))
+    clean = (~pay["is_mis_routed"].to_numpy()[ev].astype(bool)
+             if "is_mis_routed" in pay.columns else np.ones(len(ev), bool))
     out["rail_routing"] = {
         "probe_accuracy": float(accuracy_score(yr[ev], ppred)),
         "probe_macro_f1": float(f1_score(yr[ev], ppred, average="macro")),
         "tree_accuracy": float(accuracy_score(yr[ev], tpred)),
         "tree_macro_f1": float(f1_score(yr[ev], tpred, average="macro")),
         "majority_baseline": float((yr[ev] == maj).mean()),
+        "domestic_probe_accuracy": (float((ppred[dom] == yr[ev][dom]).mean())
+                                    if dom.any() else None),
+        "clean_probe_accuracy": (float((ppred[clean] == yr[ev][clean]).mean())
+                                 if clean.any() else None),
+        "per_class": per_class,
     }
 
     # --- exceptions (binary PR-AUC per type, incl. sla_breach / limit_exceeded) ---
@@ -314,6 +336,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "results_india.json"))
     args = ap.parse_args()
 
+    np.random.seed(0)                               # reproducible in-flight training
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device={device}  mode={'smoke' if args.smoke else 'full'}")
     pay, evt, schema = load_india(args)
@@ -342,9 +365,10 @@ def main():
 
     intake = intake_eval(e_pay, pay, schema, tr, ev)
     r = intake["rail_routing"]
-    print(f"[rail-routing] probe acc {r['probe_accuracy']:.3f} / macroF1 {r['probe_macro_f1']:.3f}  "
-          f"| tree acc {r['tree_accuracy']:.3f} / macroF1 {r['tree_macro_f1']:.3f}  "
-          f"| majority {r['majority_baseline']:.3f}")
+    print(f"[rail-routing] probe acc {r['probe_accuracy']:.3f} (5-class, SWIFT trivially "
+          f"separable) | domestic-only {r['domestic_probe_accuracy']} | "
+          f"clean {r['clean_probe_accuracy']} | tree acc {r['tree_accuracy']:.3f} | "
+          f"majority {r['majority_baseline']:.3f}")
     print("[intake] exception PR-AUC:",
           {k: (round(v, 3) if v is not None else None) for k, v in intake["exception_pr_auc"].items()})
     s = intake["status"]

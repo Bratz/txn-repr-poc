@@ -93,6 +93,7 @@ def main():
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--train-payments", type=int, default=12000)
     args = ap.parse_args()
+    np.random.seed(0)                               # reproducible in-flight training
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device={device}  mode={'smoke' if args.smoke else 'full'}")
 

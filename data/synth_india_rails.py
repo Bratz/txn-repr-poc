@@ -52,7 +52,8 @@ from data.synth_pacs008 import (
     generate_accounts, project_to_pacs008, vocab_report,
 )
 from data.rails import (
-    RAILS, RAIL_NAMES, below_min, choose_rail, sample_identifier, violates_cap,
+    IDENTIFIER_TYPES, RAILS, RAIL_NAMES, below_min, choose_rail, eligible_rails,
+    sample_identifier, violates_cap,
 )
 
 # Rail-conditioned orchestration workflows (ordered steps).
@@ -344,6 +345,11 @@ def build_dataset(cfg: IndiaConfig):
         row["rail_family"] = rail                       # 1:1 in India; kept for parity
         row["identifier_type"] = identifier
         row["settlement_kind"] = RAILS[rail].settlement
+        # mis-routed = the ATTEMPTED rail isn't eligible for this payment (the injected
+        # over-cap / under-min cases). Their `rail` label is the attempt, not a valid route,
+        # so routing-accuracy should exclude them (they exist to generate the exceptions).
+        _id = identifier if identifier in IDENTIFIER_TYPES else None
+        row["is_mis_routed"] = int(rail not in eligible_rails(amount, _id, xborder))
         row["direction"] = direction
         row["terminal_status"] = status
         row["time_to_settle_min"] = round(seconds / 60.0, 3)

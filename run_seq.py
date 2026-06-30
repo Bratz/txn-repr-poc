@@ -158,7 +158,7 @@ def main():
     # --- Stage A: v1 encoder -> frozen e_t ---------------------------------- #
     enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
                if args.smoke else EncoderConfig())
-    torch.manual_seed(0)
+    torch.manual_seed(0); np.random.seed(0)         # reproducible (incl. np.random shuffles)
     encoder, assembler, vocabs = build_pretraining_stack(df, schema, enc_cfg, party_epochs=1)
     encoder.to(device)
     print("[A] pretrain v1 encoder ...")
