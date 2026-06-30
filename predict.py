@@ -250,7 +250,17 @@ def load_model(save_dir, device=None, llm=None) -> Scorer:
         from decoder.multimodal_decoder import HFCausalLM
         llm = HFCausalLM(b["llm_name"])
     decoder = MultimodalDecoder(encoder, llm, dec_cfg).to(device)
-    decoder.load_state_dict(b["trio_state"], strict=False)   # encoder/llm keys absent
+    # strict=False because the saved trio deliberately omits encoder./llm. keys — but verify
+    # the trio itself loaded fully: a renamed/missing adapter param would otherwise leave
+    # randomly-initialised adapters and score garbage silently.
+    incompat = decoder.load_state_dict(b["trio_state"], strict=False)
+    unexpected = list(incompat.unexpected_keys)
+    missing_trio = [k for k in incompat.missing_keys
+                    if not (k.startswith("encoder.") or k.startswith("llm."))]
+    if unexpected or missing_trio:
+        raise RuntimeError(
+            f"adapter checkpoint mismatch — unexpected={unexpected[:5]} "
+            f"missing_trio={missing_trio[:5]}; the saved trio does not fit this decoder")
     decoder.eval()
 
     # Task map: prefer the saved multi-task list; fall back to a lone "risk" task

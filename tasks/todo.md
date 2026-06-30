@@ -18,18 +18,21 @@ hyperparameters or unfreeze anything (fidelity preserved).
   overridden to keep encoder+LLM in eval; `predict_proba` / `history_encoder.encode` save/restore mode.
 - [x] **P1-5 Seed numpy.** `run_india/run_twin/run_seq/run_golden` seed `np.random` in `main()`.
 
-## Backlog (from review, not this PR)
+## Backlog (from review)
 
-- [ ] P1 strict=False decoder load swallows missing trio keys (`predict.py:253`).
+- [x] P1 strict=False decoder load — now checks unexpected/missing trio keys (`predict.py`).
+- [x] P1 XML: type-dispatched source (string/bytes/path); symmetric UltmtDbtr + `_idstr`
+  canonical ids (no "12345.0"); guarded `float(amt.text)`; explicit `_first_id` priority paths.
+- [x] P1 serve_india: no-eligible-rail fallback (drop instrument constraint) + clean
+  missing-bundle/input errors.
+- [x] P2 freeze() blocking later `.train()` — done via `MultimodalDecoder.train()` override.
+- [x] P2 serve round-trip reuses same probes (tautology) — fixed to compare a 2nd loaded scorer.
 - [ ] P1 held-out leak: assert `e_all` aligned to reset-index df (`history_encoder.pretrain`).
-- [ ] P1 XML: parser source-dispatch on long string/bytes; writer drops UltmtDbtr & emits
-  "12345.0" for numeric IDs; guarded `float(amt.text)`; explicit `_first_id` paths.
-- [ ] P1 serve_india: no-eligible-rail fallback + missing-bundle/file errors.
 - [ ] P1 quantizer: reject non-finite amounts.
 - [ ] P1 (latent) decoder all-ones attention/target masks; dead prefix-pad logit code.
-- [ ] P2 tests: intake_eval/run_inflight (twin+india), no-eligible-rail, legacy ckpt load,
-  run_gpu tiny/single-class split; serve round-trip reuses same probes (tautology).
-- [ ] P2 cdist zero-distance eps; freeze() block later .train(); CoLES B<2 no-op.
+- [ ] P2 tests: intake_eval/run_inflight (twin+india), legacy ckpt load,
+  run_gpu tiny/single-class split.
+- [ ] P2 cdist zero-distance eps; CoLES B<2 no-op.
 
 ## Review (filled on completion)
 

@@ -63,6 +63,47 @@ def test_is_mis_routed_flags_injected_gate_rows():
     assert len(ok) and (ok["is_mis_routed"] == 0).all()
 
 
+# --- backlog: XML writer/parser robustness ------------------------------------- #
+
+def test_writer_canonicalises_numeric_ids_and_roundtrips_ultmt_dbtr():
+    from data.iso20022_pacs008 import parse_pacs008, write_pacs008
+    rows = [{
+        "IntrBkSttlmAmt": 1000.0, "Ccy": "INR", "IntrBkSttlmDt": "2026-06-29",
+        "Dbtr_Nm": "D Co", "Dbtr_Ctry": "IN", "DbtrAcct_Id": 12345.0,     # numeric (float)
+        "Cdtr_Nm": "C Co", "Cdtr_Ctry": "IN", "CdtrAcct_Id": 67890,       # numeric (int)
+        "UltmtDbtr_Id": 111, "UltmtDbtr_Nm": "D Co",
+        "UltmtCdtr_Id": 222, "UltmtCdtr_Nm": "C Co",
+        "identifier_type": "ACCT_IFSC", "SttlmMtd": "CLRG",
+    }]
+    xml = write_pacs008(rows)
+    assert "12345.0" not in xml and "12345" in xml                        # no ".0"
+    p = parse_pacs008(xml)[0]
+    assert p["DbtrAcct_Id"] == "12345" and p["CdtrAcct_Id"] == "67890"
+    assert p["UltmtDbtr_Id"] == "111" and p["UltmtCdtr_Id"] == "222"      # symmetric Ultmt
+
+
+def test_parser_guards_malformed_amount_and_accepts_bytes():
+    from data.iso20022_pacs008 import parse_pacs008
+    xml = ('<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">'
+           '<FIToFICstmrCdtTrf><GrpHdr><SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf></GrpHdr>'
+           '<CdtTrfTxInf><IntrBkSttlmAmt Ccy="INR">N/A</IntrBkSttlmAmt>'
+           '<Dbtr><Nm>D</Nm><PstlAdr><Ctry>IN</Ctry></PstlAdr></Dbtr>'
+           '<DbtrAcct><Id><Othr><Id>A1</Id></Othr></Id></DbtrAcct>'
+           '<Cdtr><Nm>C</Nm><PstlAdr><Ctry>IN</Ctry></PstlAdr></Cdtr>'
+           '<CdtrAcct><Id><Othr><Id>A2</Id></Othr></Id></CdtrAcct>'
+           '</CdtTrfTxInf></FIToFICstmrCdtTrf></Document>')
+    assert parse_pacs008(xml)[0]["IntrBkSttlmAmt"] == 0.0                 # malformed -> 0
+    assert parse_pacs008(xml.encode())[0]["Ccy"] == "INR"                # bytes accepted
+
+
+def test_first_id_priority_prefers_bic():
+    import xml.etree.ElementTree as ET
+    from data.iso20022_pacs008 import _first_id
+    party = ET.fromstring("<Cdtr><Id><OrgId><AnyBIC>CHASUS33</AnyBIC>"
+                          "<Othr><Id>OTHER</Id></Othr></OrgId></Id></Cdtr>")
+    assert _first_id(party) == "CHASUS33"                                 # BIC over Othr/Id
+
+
 def test_rail_routing_reports_per_class_and_domestic():
     from data.synth_india_rails import IndiaConfig, build_dataset, build_schema
     from run_india import _visible_features, intake_eval

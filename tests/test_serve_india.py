@@ -49,6 +49,15 @@ def test_save_load_predict_roundtrip(tmp_path):
         if elig:
             assert r["rail_pred"] in elig
 
+    # no-eligible-rail fallback: a contradictory instrument (VPA over the UPI cap, domestic)
+    # has no eligible rail under the instrument constraint; predict must still emit a rail
+    # that is valid by amount + cross-border.
+    bad = sub.iloc[[0]].copy()
+    bad["identifier_type"] = "VPA"; bad["IntrBkSttlmAmt"] = 150_000.0
+    bad["Dbtr_Ctry"] = "IN"; bad["Cdtr_Ctry"] = "IN"
+    from data.rails import eligible_rails
+    assert scorer.predict(bad)["rail_pred"].iloc[0] in eligible_rails(150_000, None, False)
+
     # round-trip fidelity: a fresh in-memory scorer and the reloaded one produce identical
     # predictions on the same rows (save/load is lossless, guard applied in both).
     from serve_india import IndiaScorer

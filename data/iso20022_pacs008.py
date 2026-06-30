@@ -66,14 +66,17 @@ def _text(el, path, default=None):
 
 
 def _first_id(party):
-    """First non-empty Id leaf under a party's Id (OrgId/AnyBIC, Othr/Id, PrvtId/...)."""
+    """A party's identifier, by ISO priority: OrgId/{AnyBIC,LEI,Othr/Id} then PrvtId/Othr/Id."""
+    if party is None:
+        return None
     idel = _child(party, "Id")
     if idel is None:
         return None
-    for node in idel.iter():
-        if node is not party and node.text and node.text.strip() and _local(node.tag) in (
-                "AnyBIC", "BICFI", "LEI", "Id"):
-            return node.text.strip()
+    for path in (["OrgId", "AnyBIC"], ["OrgId", "LEI"], ["OrgId", "Othr", "Id"],
+                 ["PrvtId", "Othr", "Id"], ["Othr", "Id"]):
+        v = _text(idel, path)
+        if v:
+            return v
     return None
 
 
@@ -99,7 +102,10 @@ def _enrich(row, key, enrich):
 
 def _project_tx(tx, sttlm_mtd, enrich):
     amt = _find(tx, ["IntrBkSttlmAmt"])
-    amount = float(amt.text) if (amt is not None and amt.text) else 0.0
+    try:
+        amount = float(amt.text) if (amt is not None and amt.text) else 0.0
+    except (TypeError, ValueError):
+        amount = 0.0                                       # malformed amount -> 0, not a crash
     ccy = amt.get("Ccy") if amt is not None else None
 
     dbtr, cdtr = _find(tx, ["Dbtr"]), _find(tx, ["Cdtr"])
@@ -150,10 +156,16 @@ def parse_pacs008(source, enrich: dict | None = None) -> list[dict]:
     `enrich` optionally supplies {account_id: {"industry":.., "sub_industry":..}} since those
     attributes are not in the message. One row per CdtTrfTxInf.
     """
-    if isinstance(source, (str, Path)) and Path(str(source)).exists():
+    # Dispatch by type first (don't probe .exists() on a multi-KB XML string — that can
+    # raise "path too long" on some platforms; and Path has no .encode()).
+    if isinstance(source, Path):
         root = ET.parse(str(source)).getroot()
+    elif isinstance(source, bytes):
+        root = ET.fromstring(source)
+    elif isinstance(source, str) and source.lstrip()[:1] == "<":
+        root = ET.fromstring(source)                       # inline XML string
     else:
-        root = ET.fromstring(source.encode() if isinstance(source, str) else source)
+        root = ET.parse(str(source)).getroot()             # treat as a path
 
     body = _find(root, ["FIToFICstmrCdtTrf"]) or root      # tolerate Document or bare body
     grp = _find(body, ["GrpHdr"])
@@ -186,21 +198,39 @@ def _sub(parent, tag, text=None, **attrs):
     return el
 
 
-def _party(tx, role, nm, ctry, party_id):
+def _idstr(v):
+    """Canonical id string: an integral numeric (incl. pandas float) -> "12345", not "12345.0"."""
+    try:
+        f = float(v)
+        if f == int(f):
+            return str(int(f))
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+def _party(tx, role, nm, ctry):
+    """Debtor/Creditor party: name + country only (the party's identity rides in Ultmt*)."""
     p = _sub(tx, role)
     _sub(p, "Nm", nm)
     if ctry and ctry != UNKNOWN:
         _sub(_sub(p, "PstlAdr"), "Ctry", ctry)
+
+
+def _ultmt(tx, role, nm, party_id):
+    """UltmtDbtr / UltmtCdtr — carries the ultimate-party Id symmetrically on both sides."""
+    p = _sub(tx, role)
+    _sub(p, "Nm", nm)
     if party_id and party_id != UNKNOWN:
-        _sub(_sub(_sub(_sub(p, "Id"), "OrgId"), "Othr"), "Id", party_id)
+        _sub(_sub(_sub(_sub(p, "Id"), "OrgId"), "Othr"), "Id", _idstr(party_id))
 
 
 def _acct(tx, role, acct_id, iban=False):
     idel = _sub(_sub(tx, role), "Id")
     if iban:
-        _sub(idel, "IBAN", acct_id)
+        _sub(idel, "IBAN", _idstr(acct_id))
     else:
-        _sub(_sub(idel, "Othr"), "Id", acct_id)
+        _sub(_sub(idel, "Othr"), "Id", _idstr(acct_id))
 
 
 def write_pacs008(rows, msg_id="MSG-GOLDEN-0001", cre_dt_tm="2026-06-29T09:30:00") -> str:
@@ -231,16 +261,17 @@ def write_pacs008(rows, msg_id="MSG-GOLDEN-0001", cre_dt_tm="2026-06-29T09:30:00
         _sub(tx, "IntrBkSttlmAmt", f"{float(r['IntrBkSttlmAmt']):.2f}", Ccy=r.get("Ccy", "INR"))
         _sub(tx, "IntrBkSttlmDt", r.get("IntrBkSttlmDt", "2026-06-29"))
         _sub(tx, "ChrgBr", "SHAR")
-        _party(tx, "Dbtr", r.get("Dbtr_Nm", UNKNOWN), r.get("Dbtr_Ctry"), r.get("UltmtDbtr_Id"))
+        _party(tx, "Dbtr", r.get("Dbtr_Nm", UNKNOWN), r.get("Dbtr_Ctry"))
         _acct(tx, "DbtrAcct", r.get("DbtrAcct_Id", UNKNOWN), iban=False)
         # IBAN on the creditor side when the instrument is BIC/IBAN (cross-border)
         iban = r.get("identifier_type") == "BIC_IBAN"
-        _party(tx, "Cdtr", r.get("Cdtr_Nm", UNKNOWN), r.get("Cdtr_Ctry"), r.get("UltmtCdtr_Id"))
+        _party(tx, "Cdtr", r.get("Cdtr_Nm", UNKNOWN), r.get("Cdtr_Ctry"))
         _acct(tx, "CdtrAcct", r.get("CdtrAcct_Id", UNKNOWN), iban=iban)
-        ucp = _sub(tx, "UltmtCdtr")
-        _sub(ucp, "Nm", r.get("UltmtCdtr_Nm", r.get("Cdtr_Nm", UNKNOWN)))
-        if r.get("UltmtCdtr_Id", UNKNOWN) != UNKNOWN:
-            _sub(_sub(_sub(_sub(ucp, "Id"), "OrgId"), "Othr"), "Id", r["UltmtCdtr_Id"])
+        # ultimate parties carried symmetrically (debtor AND creditor)
+        _ultmt(tx, "UltmtDbtr", r.get("UltmtDbtr_Nm", r.get("Dbtr_Nm", UNKNOWN)),
+               r.get("UltmtDbtr_Id"))
+        _ultmt(tx, "UltmtCdtr", r.get("UltmtCdtr_Nm", r.get("Cdtr_Nm", UNKNOWN)),
+               r.get("UltmtCdtr_Id"))
 
     ET.indent(doc, space="  ")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(doc, encoding="unicode")

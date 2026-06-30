@@ -105,6 +105,10 @@ class IndiaScorer:
         for i in range(len(df)):
             ident = idents[i] if idents[i] in IDENTIFIER_TYPES else None
             elig = eligible_rails(amts[i], ident, bool(xb[i]))
+            if not elig:
+                # contradictory instrument (e.g. VPA over the UPI cap, or BIC domestic):
+                # fall back to eligibility by amount + cross-border only.
+                elig = eligible_rails(amts[i], None, bool(xb[i]))
             keep = np.array([c in elig for c in rail_cls])
             if elig and keep.any():
                 rail_p[i, ~keep] = 0.0
@@ -133,7 +137,10 @@ class IndiaScorer:
 def load_india_model(save_dir, device=None) -> IndiaScorer:
     import joblib
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    b = torch.load(Path(save_dir) / _ENC, map_location="cpu", weights_only=False)
+    save_dir = Path(save_dir)
+    if not (save_dir / _ENC).exists() or not (save_dir / _PROBES).exists():
+        raise SystemExit(f"no India model at {save_dir} (run `run_india.py --save {save_dir}` first)")
+    b = torch.load(save_dir / _ENC, map_location="cpu", weights_only=False)
     enc_cfg = EncoderConfig(**b["enc_cfg"])
     vocabs = ColumnVocabs(
         high_card=b["vocabs"]["high_card"],
@@ -171,6 +178,8 @@ def main():
 
     scorer = load_india_model(args.model_dir)
     p = Path(args.input)
+    if not p.exists():
+        raise SystemExit(f"input not found: {p}")
     if p.suffix == ".xml":
         from data.iso20022_pacs008 import parse_pacs008_frame
         df = parse_pacs008_frame(p)                          # raw pacs.008 -> projected rows
