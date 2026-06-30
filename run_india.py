@@ -31,8 +31,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from run_gpu import _to_device
-from run_seq import embed_all_rows
+from run_seq import frozen_embeddings
 from run_twin import Inflight, collate_steps          # generic; reused as-is
 
 ROOT = Path(__file__).resolve().parent
@@ -320,9 +319,6 @@ def run_inflight(evt, pay, tr_ids, ev_ids, schema, device, epochs, smoke, log=pr
 # --------------------------------------------------------------------------- #
 
 def main():
-    from encoder.tabular_encoder import EncoderConfig, build_pretraining_stack
-    from encoder.tabular_encoder import pretrain as enc_pretrain
-
     ap = argparse.ArgumentParser(description="India multi-rail twin (CPU-friendly)")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--payments", default=str(ROOT / "data" / "india_rails_payments.parquet"))
@@ -345,16 +341,7 @@ def main():
           f"rails {pay['rail'].value_counts().to_dict()}")
 
     # frozen v1 encoder -> f(payment)
-    enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
-               if args.smoke else EncoderConfig())
-    torch.manual_seed(0)
-    encoder, assembler, vocabs = build_pretraining_stack(pay, schema, enc_cfg, party_epochs=1)
-    encoder.to(device)
-    print("[A] pretrain v1 encoder ...")
-    enc_pretrain(encoder, _to_device(vocabs.encode(pay), device), enc_cfg,
-                 batch_size=128 if args.smoke else 256)
-    encoder.freeze()
-    e_pay = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()
+    encoder, vocabs, e_pay, enc_cfg = frozen_embeddings(pay, schema, args.smoke, device)
 
     # held-out split on payment ids
     rng = np.random.default_rng(0)

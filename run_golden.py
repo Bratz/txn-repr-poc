@@ -26,7 +26,7 @@ from data.golden_cases import build_golden
 from data.iso20022_pacs008 import parse_pacs008_frame, write_pacs008
 from data.synth_india_rails import IndiaConfig, build_dataset, build_schema
 from run_india import train_probes
-from run_seq import embed_all_rows
+from run_seq import frozen_embeddings
 from serve_india import IndiaScorer
 
 # task -> (golden label column, predicted column from the scorer)
@@ -40,20 +40,11 @@ SINGLE_TASKS = [
 
 
 def _train_backbone(args, device):
-    from encoder.tabular_encoder import EncoderConfig, build_pretraining_stack
-    from encoder.tabular_encoder import pretrain as enc_pretrain
     cfg = IndiaConfig(num_accounts=600 if args.smoke else 1500,
                       num_payments=args.train_payments, seed=23)
-    pay, evt, accs = build_dataset(cfg)
+    pay, _, accs = build_dataset(cfg)
     schema = build_schema(pay, accs)
-    enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
-               if args.smoke else EncoderConfig())
-    torch.manual_seed(0)
-    encoder, _, vocabs = build_pretraining_stack(pay, schema, enc_cfg, party_epochs=1)
-    encoder.to(device)
-    enc_pretrain(encoder, vocabs.encode(pay), enc_cfg, batch_size=128 if args.smoke else 256)
-    encoder.freeze()
-    e = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()
+    encoder, vocabs, e, _ = frozen_embeddings(pay, schema, args.smoke, device, log=lambda *_: None)
     probes = train_probes(e, pay, schema, np.arange(len(pay)))
     return encoder, vocabs, probes, schema
 

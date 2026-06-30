@@ -40,6 +40,28 @@ def embed_all_rows(encoder, full, n, device, batch_size=512):
     return torch.cat(out, dim=0)
 
 
+def frozen_embeddings(pay, schema, smoke, device, log=print):
+    """Build + pretrain the v1 encoder, FREEZE it, and return its per-row embeddings.
+
+    The shared frozen-backbone step for the downstream-probe orchestrators
+    (run_india / run_twin / run_golden). Returns (encoder, vocabs, e_pay, enc_cfg) where
+    e_pay is an (N, D) numpy array of frozen f(row) for every row.
+    """
+    from encoder.tabular_encoder import EncoderConfig, build_pretraining_stack
+    from encoder.tabular_encoder import pretrain as enc_pretrain
+    enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
+               if smoke else EncoderConfig())
+    torch.manual_seed(0)
+    encoder, _, vocabs = build_pretraining_stack(pay, schema, enc_cfg, party_epochs=1)
+    encoder.to(device)
+    log("[A] pretrain v1 encoder ...")
+    enc_pretrain(encoder, _to_device(vocabs.encode(pay), device), enc_cfg,
+                 batch_size=128 if smoke else 256)
+    encoder.freeze()
+    e_pay = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()
+    return encoder, vocabs, e_pay, enc_cfg
+
+
 def encode_histories(hist, e_all, seqs, device, static_all=None, batch_size=128):
     """Frozen entity representations h_USR for a list of sequences -> (N, D) torch."""
     from data.sequence_assembly import collate
