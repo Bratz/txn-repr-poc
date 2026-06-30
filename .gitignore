@@ -23,6 +23,7 @@ results.json
 results_seq.json
 results_twin.json
 results_india.json
+results_impute.json
 scored.csv
 # saved model checkpoints
 ckpt/
