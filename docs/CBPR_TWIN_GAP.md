@@ -182,7 +182,9 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
   **needs the full run** for lift (the labels are feature-modulated, so lift is expected).
 - **P1 · Repair-type / which-queue head** (#17): multiclass on the queue label from Track D.
 - **P2 · gpi next-tracker-status** (#2, sequence) via the v2 encoder over the message sequence.
-- **P2 · FX counter-amount regression** (#10, needs the amount split).
+- **P2 · Charges regression** (#10) — ✅ **DONE** (`run_impute` head G): predicts `charges` from
+  `f(x)`; beats the mean baseline even at smoke (MAE 145 vs 179) since charges is bps-of-amount and
+  the encoder sees the amount. `fx_rate` is deliberately NOT a head — it is market noise.
 - Already shipped: STP@pain.001 (A) · reject-reason (B) · ETA (C) · streaming booked (D).
 
 ### Track R — Rule / Lookup / Template (delisted from ML — build once, deterministic)

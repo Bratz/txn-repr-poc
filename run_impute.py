@@ -9,7 +9,10 @@ available fields and, from that frozen representation, evaluate:
   * C  ETA to settlement        -> time_to_settle_min (regression, log-space)
   * E  cancellation likelihood  -> cancel_requested  (will the originator recall it? camt.056)
   * F  return likelihood        -> returned          (will funds bounce back? pacs.004)
+  * G  charges                  -> charges           (fee regression; predictable bps-of-amount)
   * imputation                  -> per-field top-1 reconstruction of the masked fields
+
+fx_rate is deliberately NOT a head - it is market noise (unpredictable from the payment).
 All should improve pain.001 -> pacs.008 as the payment enriches. pain.001 rows are ALSO mixed
 into pretraining (run_seq.frozen_embeddings extra=), so the encoder has seen sparse initiation
 records, not only complete ones.
@@ -160,6 +163,7 @@ def main():
     y_eta = pay["time_to_settle_min"].to_numpy(dtype=float)
     y_cancel = pay["cancel_requested"].to_numpy()
     y_return = pay["returned"].to_numpy()
+    y_charges = pay["charges"].to_numpy(dtype=float) if "charges" in pay.columns else None
 
     imp, rows = {}, {}
     for si, (sname, _) in enumerate(ENRICH_ADDS):
@@ -188,6 +192,11 @@ def main():
               f"C ETA MAE {c_mae:.1f} min (base {c_base:.1f})")
         print(f"{'':11s} E cancel PR-AUC {e_pr:.3f} (prev {e_prev:.3f})   "
               f"F return PR-AUC {f_pr:.3f} (prev {f_prev:.3f})")
+        if y_charges is not None:
+            g_mae, g_base = _reg_mae(emb, y_charges, tr, ev)           # G charges regression
+            rows[sname]["charges_mae"] = g_mae
+            rows[sname]["charges_baseline_mae"] = g_base
+            print(f"{'':11s} G charges MAE {g_mae:.1f} (base {g_base:.1f})")
 
     print("\nimputation top-1  (structured fields only; high-card IDs delisted = lookup/assigned):")
     cols = [n for n, _ in ENRICH_ADDS]
