@@ -46,3 +46,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# scratch run logs / generated test schema
+*.err
+data/_test100_schema.json
