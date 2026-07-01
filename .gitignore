@@ -11,6 +11,8 @@ data/column_schema.json
 data/column_schema_seq.json
 # payment-twin generated artifacts (data/synth_workflow.py)
 data/column_schema_twin.json
+# India multi-rail generated artifacts (data/synth_india_rails.py)
+data/column_schema_india.json
 
 # model artifacts
 *.pt
@@ -20,9 +22,14 @@ party_store/
 results.json
 results_seq.json
 results_twin.json
+results_india.json
+results_impute.json
 scored.csv
 # saved model checkpoints
 ckpt/
+# saved India serving model (serve_india.py) + sklearn probes
+model_india/
+*.joblib
 
 # secrets — never commit SSH keys / tokens
 sshkey
@@ -31,8 +38,15 @@ sshkey.pub
 id_rsa*
 *.bundle
 
+# scratch run logs
+*.log
+
 # python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# scratch run logs / generated test schema
+*.err
+data/_test100_schema.json

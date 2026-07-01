@@ -40,6 +40,28 @@ def embed_all_rows(encoder, full, n, device, batch_size=512):
     return torch.cat(out, dim=0)
 
 
+def frozen_embeddings(pay, schema, smoke, device, log=print):
+    """Build + pretrain the v1 encoder, FREEZE it, and return its per-row embeddings.
+
+    The shared frozen-backbone step for the downstream-probe orchestrators
+    (run_india / run_twin / run_golden). Returns (encoder, vocabs, e_pay, enc_cfg) where
+    e_pay is an (N, D) numpy array of frozen f(row) for every row.
+    """
+    from encoder.tabular_encoder import EncoderConfig, build_pretraining_stack
+    from encoder.tabular_encoder import pretrain as enc_pretrain
+    enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
+               if smoke else EncoderConfig())
+    torch.manual_seed(0)
+    encoder, _, vocabs = build_pretraining_stack(pay, schema, enc_cfg, party_epochs=1)
+    encoder.to(device)
+    log("[A] pretrain v1 encoder ...")
+    enc_pretrain(encoder, _to_device(vocabs.encode(pay), device), enc_cfg,
+                 batch_size=128 if smoke else 256)
+    encoder.freeze()
+    e_pay = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()
+    return encoder, vocabs, e_pay, enc_cfg
+
+
 def encode_histories(hist, e_all, seqs, device, static_all=None, batch_size=128):
     """Frozen entity representations h_USR for a list of sequences -> (N, D) torch."""
     from data.sequence_assembly import collate
@@ -158,7 +180,7 @@ def main():
     # --- Stage A: v1 encoder -> frozen e_t ---------------------------------- #
     enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
                if args.smoke else EncoderConfig())
-    torch.manual_seed(0)
+    torch.manual_seed(0); np.random.seed(0)         # reproducible (incl. np.random shuffles)
     encoder, assembler, vocabs = build_pretraining_stack(df, schema, enc_cfg, party_epochs=1)
     encoder.to(device)
     print("[A] pretrain v1 encoder ...")
@@ -258,6 +280,22 @@ def main():
               f"{c['C4_heldout_gain_pp']:+.1f} pp  {'PASS' if c['C4_pass'] else 'FAIL'}")
         print(f"  LLM on h_USR    PR-AUC {b_pr:.3f}   -> C5 gap {c['C5_llm_gap_pp']:+.1f} pp  "
               f"{'DROP LLM' if c['C5_drop_llm'] else 'keep LLM'}")
+
+        # --- velocity head: single-entity inter-arrival burst (timing-only signal) ----- #
+        from data.sequence_assembly import velocity_labels
+        yv_tr, yv_ev = velocity_labels(train_seqs), velocity_labels(eval_seqs)
+        if len(set(yv_tr.tolist())) > 1 and len(set(yv_ev.tolist())) > 1:
+            v_seq = probe_pr(h_tr.cpu().numpy(), yv_tr, h_ev.cpu().numpy(), yv_ev)   # time-aware
+            v_pool = probe_pr(pooled_features(e_all, train_seqs), yv_tr,
+                              pooled_features(e_all, eval_seqs), yv_ev)              # order-blind
+            results["velocity"] = {"pr_auc_timeaware": v_seq, "pr_auc_pooled": v_pool,
+                                   "lift_pp": (v_seq - v_pool) * 100,
+                                   "prevalence": float(yv_ev.mean())}
+            print(f"  velocity burst  PR-AUC {v_seq:.3f} time-aware vs {v_pool:.3f} pooled  "
+                  f"-> lift {(v_seq - v_pool) * 100:+.1f} pp  (prev {yv_ev.mean():.2f})")
+        else:
+            results["velocity"] = {"note": "degenerate velocity label at this scale"}
+            print("  velocity burst  degenerate label at this scale (raise --limit)")
 
     Path(args.out).write_text(json.dumps(results, indent=2, default=float))
     print(f"\nwrote {args.out}")

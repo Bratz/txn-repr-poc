@@ -98,10 +98,17 @@ class HistoryEncoder(nn.Module):
 
     @torch.no_grad()
     def encode(self, e_seq, batch, static=None) -> torch.Tensor:
-        """Entity representation h_USR with no masking (downstream / eval)."""
+        """Entity representation h_USR with no masking (downstream / eval).
+
+        Saves/restores the module's training mode so calling encode() mid-training does not
+        silently leave the encoder in eval (dropout off) for the rest of the loop."""
+        was_training = self.training
         self.eval()
-        h_usr, _ = self.forward(e_seq, batch, static, event_mask=None)
-        return h_usr
+        try:
+            h_usr, _ = self.forward(e_seq, batch, static, event_mask=None)
+            return h_usr
+        finally:
+            self.train(was_training)
 
     # -- objective -------------------------------------------------------- #
     def sample_event_mask(self, pad_mask: torch.Tensor) -> torch.Tensor:
@@ -133,7 +140,9 @@ class HistoryEncoder(nn.Module):
         l_mask = self.masked_event_loss(hev1, targets, m1)
 
         l_trip = e_seq.new_zeros(())
-        if self.config.triplet_weight > 0:
+        # CoLES needs >= 2 entities to form a negative; a singleton (ragged tail) batch
+        # would silently contribute no triplet signal — skip it explicitly.
+        if self.config.triplet_weight > 0 and e_seq.shape[0] >= 2:
             m2 = self.sample_event_mask(batch["pad_mask"])
             h2, _ = self.forward(e_seq, batch, static, m2)
             B = e_seq.shape[0]
@@ -170,6 +179,14 @@ def pretrain(hist: HistoryEncoder, e_all: torch.Tensor, targets_all: dict,
     from data.sequence_assembly import collate
 
     device = e_all.device
+    # Invariant: e_all and targets_all are indexed by sequence `pos`, which are positions into
+    # the SAME reset-index df the sequences were built from. A misalignment here would silently
+    # pair an actor's events with another row's embedding (and leak the held-out split).
+    N = e_all.shape[0]
+    for name, t in targets_all.items():
+        assert t.shape[0] == N, (
+            f"targets_all[{name}] has {t.shape[0]} rows but e_all has {N} — both must be "
+            "aligned to the same reset-index df as the sequences")
     opt = torch.optim.Adam(hist.parameters(), lr=config.lr)
     n = len(train_seqs)
     hist.train()

@@ -221,7 +221,19 @@ class MultimodalDecoder(nn.Module):
         if not self.config.train_llm:               # frozen LLM (adapter mode)
             for p in self.llm_parameters():
                 p.requires_grad_(False)
+            if isinstance(self.llm, nn.Module):
+                self.llm.eval()                     # freeze == deterministic: kill LLM dropout
         # else: LLM stays trainable → C2 full fine-tune comparator
+
+    def train(self, mode: bool = True):
+        """Switch trainable parts to `mode`, but keep the FROZEN base deterministic:
+        the encoder (always) and the LLM (adapter mode) stay in eval regardless, so a
+        later `.train()` can't silently re-enable their dropout. Freeze == deterministic."""
+        super().train(mode)
+        self.encoder.eval()
+        if not self.config.train_llm and isinstance(self.llm, nn.Module):
+            self.llm.eval()
+        return self
 
     def llm_parameters(self):
         if isinstance(self.llm, nn.Module):
@@ -277,6 +289,10 @@ class MultimodalDecoder(nn.Module):
         parts += [instr, task]
 
         z = torch.cat(parts, dim=1)                                     # (B,S_z,Dllm)
+        # All rows in a batch have identical length here (fixed adapter-token count +
+        # fixed-width instruction_ids), so there is no intra-batch padding — an all-ones
+        # attention mask is correct. If ragged instructions are ever batched, a real
+        # per-row padding mask must be threaded instead.
         mask = torch.ones(z.shape[0], z.shape[1], device=z.device)
         return z, mask
 
@@ -316,14 +332,20 @@ class MultimodalDecoder(nn.Module):
                       label_token_ids) -> torch.Tensor:
         """Well-formed label distribution: softmax over the answer tokens at the
         first response position (B, n_labels)."""
+        was_training = self.training
         self.eval()
-        z, z_mask = self.build_inputs(batch, task_ids, instruction_ids)
-        logits = self.llm.forward_embeds(z, z_mask, self._prefixes(z.shape[0]))
-        # the last z position predicts the first response token
-        pad = logits.shape[1] - z.shape[1]
-        next_logits = logits[:, pad + z.shape[1] - 1, :]          # (B, vocab)
-        label_ids = torch.as_tensor(label_token_ids, device=z.device)
-        return F.softmax(next_logits.index_select(1, label_ids), dim=1)
+        try:
+            z, z_mask = self.build_inputs(batch, task_ids, instruction_ids)
+            logits = self.llm.forward_embeds(z, z_mask, self._prefixes(z.shape[0]))
+            # both backends return logits of length S_z (the φ prefix widens the KV cache,
+            # not the query), so there is no prefix offset — the last z position predicts
+            # the first response token.
+            assert logits.shape[1] == z.shape[1], "unexpected LLM prefix offset in logits"
+            next_logits = logits[:, z.shape[1] - 1, :]            # (B, vocab)
+            label_ids = torch.as_tensor(label_token_ids, device=z.device)
+            return F.softmax(next_logits.index_select(1, label_ids), dim=1)
+        finally:
+            self.train(was_training)                             # restore prior mode
 
 
 # --------------------------------------------------------------------------- #

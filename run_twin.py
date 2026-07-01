@@ -25,8 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from run_gpu import _index_batch, _to_device
-from run_seq import embed_all_rows
+from run_seq import frozen_embeddings
 
 ROOT = Path(__file__).resolve().parent
 
@@ -219,9 +218,6 @@ def run_inflight(evt, pay, tr_ids, ev_ids, schema, device, epochs, smoke, log=pr
 # --------------------------------------------------------------------------- #
 
 def main():
-    from encoder.tabular_encoder import EncoderConfig, build_pretraining_stack
-    from encoder.tabular_encoder import pretrain as enc_pretrain
-
     ap = argparse.ArgumentParser(description="payment-level digital twin")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--payments", default=str(ROOT / "data" / "pacs008_twin_payments.parquet"))
@@ -232,6 +228,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "results_twin.json"))
     args = ap.parse_args()
 
+    np.random.seed(0)                               # reproducible in-flight training
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device={device}  mode={'smoke' if args.smoke else 'full'}")
     pay, evt, schema = load_twin(args)
@@ -240,16 +237,7 @@ def main():
           f"status {pay['terminal_status'].value_counts().to_dict()}")
 
     # frozen v1 encoder -> f(payment)
-    enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
-               if args.smoke else EncoderConfig())
-    torch.manual_seed(0)
-    encoder, assembler, vocabs = build_pretraining_stack(pay, schema, enc_cfg, party_epochs=1)
-    encoder.to(device)
-    print("[A] pretrain v1 encoder ...")
-    enc_pretrain(encoder, _to_device(vocabs.encode(pay), device), enc_cfg,
-                 batch_size=128 if args.smoke else 256)
-    encoder.freeze()
-    e_pay = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()
+    encoder, vocabs, e_pay, enc_cfg = frozen_embeddings(pay, schema, args.smoke, device)
 
     # held-out split on payment ids
     rng = np.random.default_rng(0)

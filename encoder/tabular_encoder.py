@@ -72,7 +72,12 @@ def batch_hard_triplet_loss(
     loss = relu(margin + d_pos − d_neg). `labels` mark which rows are the same
     (two views of a row share a label).
     """
-    dist = torch.cdist(embeddings, embeddings)             # (N, N) euclidean
+    # Stable pairwise euclidean: torch.cdist back-props NaN at d=0 (identical embeddings,
+    # common with two augmented views early in training), so compute squared distances and
+    # sqrt with an epsilon instead.
+    gram = embeddings @ embeddings.t()
+    sq = (gram.diagonal().unsqueeze(0) + gram.diagonal().unsqueeze(1) - 2 * gram).clamp_min(0)
+    dist = torch.sqrt(sq + 1e-12)                          # (N, N) euclidean
     same = labels.unsqueeze(0) == labels.unsqueeze(1)
     eye = torch.eye(len(labels), dtype=torch.bool, device=labels.device)
     pos_mask = same & ~eye

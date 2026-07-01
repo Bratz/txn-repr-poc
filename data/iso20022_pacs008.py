@@ -1,0 +1,297 @@
+"""
+Layer-1 projection (LIVE): raw ISO 20022 pacs.008 XML -> a projected feature row.
+
+This is the inverse of synth_pacs008.project_to_pacs008: instead of building a row from
+synthetic Account objects, it parses a real pacs.008 (`FIToFICstmrCdtTrf`) message and emits
+the same columns the encoder consumes, so serve_india.py can score actual message XML.
+
+What pacs.008 DOES carry (parsed directly):
+  IntrBkSttlmAmt + @Ccy, IntrBkSttlmDt, Dbtr/Cdtr Nm, Dbtr/Cdtr PstlAdr/Ctry,
+  Dbtr/Cdtr Acct Id (IBAN or Othr/Id), UltmtDbtr/UltmtCdtr Id+Nm (or Dbtr/Cdtr as fallback),
+  GrpHdr SttlmInf/SttlmMtd.
+
+What pacs.008 does NOT carry (honest gaps - defaulted, or supplied via `enrich`):
+  * industry / sub-industry are ENRICHMENT attributes (from a party master), not message
+    fields -> default "Unknown" (the encoder's vocab maps unseen categories to its OOV
+    bucket), or pass `enrich={party_or_acct_id: {"industry":..,"sub_industry":..}}`.
+  * identifier_type is India-rail-specific. UPI(VPA)/IMPS(MMID) proxies are NOT standard
+    pacs.008 elements (those rails use NPCI's own rails/APIs); cross-border pacs.008 is
+    BIC/IBAN. We derive: IBAN or cross-border -> BIC_IBAN, else ACCT_IFSC. Override by
+    setting row["identifier_type"] before scoring if you know better.
+
+Namespaces: pacs.008 has versioned namespaces (pacs.008.001.08/.09/.10/...). We match by
+LOCAL tag name so any version parses. Multi-transaction messages yield one row per
+CdtTrfTxInf.
+"""
+
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+# Columns the projection fills (the encoder reads these via the schema buckets).
+UNKNOWN = "Unknown"
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _child(el, name):
+    if el is None:
+        return None
+    for c in el:
+        if _local(c.tag) == name:
+            return c
+    return None
+
+
+def _find(el, path):
+    """Descend by a list of local tag names; return the first matching element or None."""
+    cur = el
+    for name in path:
+        cur = _child(cur, name)
+        if cur is None:
+            return None
+    return cur
+
+
+def _findall(el, name):
+    return [c for c in (el or []) if _local(c.tag) == name]
+
+
+def _text(el, path, default=None):
+    node = _find(el, path)
+    return node.text.strip() if (node is not None and node.text) else default
+
+
+def _first_id(party):
+    """A party's identifier, by ISO priority: OrgId/{AnyBIC,LEI,Othr/Id} then PrvtId/Othr/Id."""
+    if party is None:
+        return None
+    idel = _child(party, "Id")
+    if idel is None:
+        return None
+    for path in (["OrgId", "AnyBIC"], ["OrgId", "LEI"], ["OrgId", "Othr", "Id"],
+                 ["PrvtId", "Othr", "Id"], ["Othr", "Id"]):
+        v = _text(idel, path)
+        if v:
+            return v
+    return None
+
+
+def _acct_id(acct):
+    """Account id: IBAN if present, else Othr/Id."""
+    if acct is None:
+        return None
+    iban = _text(acct, ["Id", "IBAN"])
+    return iban or _text(acct, ["Id", "Othr", "Id"])
+
+
+def _agent_bic(tx, tag):
+    return _text(_find(tx, [tag]), ["FinInstnId", "BICFI"]) or \
+        _text(_find(tx, [tag]), ["FinInstnId", "BIC"])
+
+
+def _enrich(row, key, enrich):
+    info = (enrich or {}).get(key) if key else None
+    if info:
+        return info.get("industry", UNKNOWN), info.get("sub_industry", UNKNOWN)
+    return UNKNOWN, UNKNOWN
+
+
+def _project_tx(tx, sttlm_mtd, enrich):
+    amt = _find(tx, ["IntrBkSttlmAmt"])
+    try:
+        amount = float(amt.text) if (amt is not None and amt.text) else 0.0
+    except (TypeError, ValueError):
+        amount = 0.0                                       # malformed amount -> 0, not a crash
+    ccy = amt.get("Ccy") if amt is not None else None
+
+    dbtr, cdtr = _find(tx, ["Dbtr"]), _find(tx, ["Cdtr"])
+    udbtr, ucdtr = _find(tx, ["UltmtDbtr"]), _find(tx, ["UltmtCdtr"])
+    dbtr_acct, cdtr_acct = _acct_id(_find(tx, ["DbtrAcct"])), _acct_id(_find(tx, ["CdtrAcct"]))
+    dbtr_ctry = _text(dbtr, ["PstlAdr", "Ctry"])
+    cdtr_ctry = _text(cdtr, ["PstlAdr", "Ctry"])
+
+    ultmt_dbtr_id = _first_id(udbtr) or _first_id(dbtr) or _agent_bic(tx, "DbtrAgt")
+    ultmt_cdtr_id = _first_id(ucdtr) or _first_id(cdtr) or _agent_bic(tx, "CdtrAgt")
+
+    d_ind, d_sub = _enrich({}, dbtr_acct, enrich)
+    c_ind, c_sub = _enrich({}, cdtr_acct, enrich)
+
+    # identifier_type (India-rail feature): IBAN / cross-border -> BIC_IBAN, else ACCT_IFSC.
+    xborder = bool(dbtr_ctry and cdtr_ctry and dbtr_ctry != cdtr_ctry)
+    has_iban = (_text(_find(tx, ["CdtrAcct"]), ["Id", "IBAN"]) is not None)
+    identifier_type = "BIC_IBAN" if (xborder or has_iban) else "ACCT_IFSC"
+
+    return {
+        # high-cardinality categorical (partitioning embedder)
+        "DbtrAcct_Id": dbtr_acct or UNKNOWN,
+        "CdtrAcct_Id": cdtr_acct or UNKNOWN,
+        "UltmtDbtr_Id": ultmt_dbtr_id or UNKNOWN,
+        "UltmtCdtr_Id": ultmt_cdtr_id or UNKNOWN,
+        # numerical
+        "IntrBkSttlmAmt": amount,
+        # core
+        "Ccy": ccy or UNKNOWN,
+        "IntrBkSttlmDt": _text(tx, ["IntrBkSttlmDt"]) or UNKNOWN,
+        "SttlmMtd": sttlm_mtd or UNKNOWN,
+        "identifier_type": identifier_type,
+        # meta party (offline encoder)
+        "Dbtr_Nm": _text(dbtr, ["Nm"]) or UNKNOWN,
+        "Cdtr_Nm": _text(cdtr, ["Nm"]) or UNKNOWN,
+        "UltmtDbtr_Nm": _text(udbtr, ["Nm"]) or _text(dbtr, ["Nm"]) or UNKNOWN,
+        "UltmtCdtr_Nm": _text(ucdtr, ["Nm"]) or _text(cdtr, ["Nm"]) or UNKNOWN,
+        "Dbtr_Ctry": dbtr_ctry or UNKNOWN,
+        "Cdtr_Ctry": cdtr_ctry or UNKNOWN,
+        "Dbtr_Industry": d_ind, "Cdtr_Industry": c_ind,
+        "Dbtr_SubIndustry": d_sub, "Cdtr_SubIndustry": c_sub,
+    }
+
+
+def parse_pacs008(source, enrich: dict | None = None) -> list[dict]:
+    """Parse a pacs.008 message (path, XML string, or bytes) -> list of projected rows.
+
+    `enrich` optionally supplies {account_id: {"industry":.., "sub_industry":..}} since those
+    attributes are not in the message. One row per CdtTrfTxInf.
+    """
+    # Dispatch by type first (don't probe .exists() on a multi-KB XML string — that can
+    # raise "path too long" on some platforms; and Path has no .encode()).
+    if isinstance(source, Path):
+        root = ET.parse(str(source)).getroot()
+    elif isinstance(source, bytes):
+        root = ET.fromstring(source)
+    elif isinstance(source, str) and source.lstrip()[:1] == "<":
+        root = ET.fromstring(source)                       # inline XML string
+    else:
+        root = ET.parse(str(source)).getroot()             # treat as a path
+
+    body = _find(root, ["FIToFICstmrCdtTrf"]) or root      # tolerate Document or bare body
+    grp = _find(body, ["GrpHdr"])
+    sttlm_mtd = _text(grp, ["SttlmInf", "SttlmMtd"])
+    txs = _findall(body, "CdtTrfTxInf")
+    if not txs:
+        raise ValueError("no CdtTrfTxInf found - is this a pacs.008 FIToFICstmrCdtTrf message?")
+    return [_project_tx(tx, sttlm_mtd, enrich) for tx in txs]
+
+
+def parse_pacs008_frame(source, enrich: dict | None = None):
+    import pandas as pd
+    rows = parse_pacs008(source, enrich)
+    df = pd.DataFrame(rows)
+    df.insert(0, "payment_id", range(len(df)))
+    return df
+
+
+# --------------------------------------------------------------------------- #
+# Write (row -> pacs.008 XML) - inverse of the parser
+# --------------------------------------------------------------------------- #
+
+_NS = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08"
+
+
+def _sub(parent, tag, text=None, **attrs):
+    el = ET.SubElement(parent, tag, {k: str(v) for k, v in attrs.items()})
+    if text is not None:
+        el.text = str(text)
+    return el
+
+
+def _idstr(v):
+    """Canonical id string: an integral numeric (incl. pandas float) -> "12345", not "12345.0"."""
+    try:
+        f = float(v)
+        if f == int(f):
+            return str(int(f))
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+def _party(tx, role, nm, ctry):
+    """Debtor/Creditor party: name + country only (the party's identity rides in Ultmt*)."""
+    p = _sub(tx, role)
+    _sub(p, "Nm", nm)
+    if ctry and ctry != UNKNOWN:
+        _sub(_sub(p, "PstlAdr"), "Ctry", ctry)
+
+
+def _ultmt(tx, role, nm, party_id):
+    """UltmtDbtr / UltmtCdtr — carries the ultimate-party Id symmetrically on both sides."""
+    p = _sub(tx, role)
+    _sub(p, "Nm", nm)
+    if party_id and party_id != UNKNOWN:
+        _sub(_sub(_sub(_sub(p, "Id"), "OrgId"), "Othr"), "Id", _idstr(party_id))
+
+
+def _acct(tx, role, acct_id, iban=False):
+    idel = _sub(_sub(tx, role), "Id")
+    if iban:
+        _sub(idel, "IBAN", _idstr(acct_id))
+    else:
+        _sub(_sub(idel, "Othr"), "Id", _idstr(acct_id))
+
+
+def write_pacs008(rows, msg_id="MSG-GOLDEN-0001", cre_dt_tm="2026-06-29T09:30:00") -> str:
+    """Serialise projected rows back into a single pacs.008 FIToFICstmrCdtTrf message.
+
+    The inverse of parse_pacs008 for the message-NATIVE fields (amount/ccy/date, names,
+    countries, account & party ids, SttlmMtd). Enrichment-only fields (industry,
+    identifier_type) are NOT message elements, so they do not round-trip - identifier_type
+    is re-derived on parse, industries default to Unknown.
+    """
+    rows = list(rows)
+    ET.register_namespace("", _NS)
+    doc = ET.Element(f"{{{_NS}}}Document")
+    body = _sub(doc, "FIToFICstmrCdtTrf")
+    grp = _sub(body, "GrpHdr")
+    _sub(grp, "MsgId", msg_id)
+    _sub(grp, "CreDtTm", cre_dt_tm)
+    _sub(grp, "NbOfTxs", len(rows))
+    sttlm = next((r.get("SttlmMtd") for r in rows if r.get("SttlmMtd") not in (None, UNKNOWN)),
+                 "CLRG")
+    _sub(_sub(grp, "SttlmInf"), "SttlmMtd", sttlm)
+
+    for i, r in enumerate(rows):
+        tx = _sub(body, "CdtTrfTxInf")
+        pid = _sub(tx, "PmtId")
+        _sub(pid, "EndToEndId", f"E2E-{i:04d}")
+        _sub(pid, "TxId", f"TX-{i:04d}")
+        _sub(tx, "IntrBkSttlmAmt", f"{float(r['IntrBkSttlmAmt']):.2f}", Ccy=r.get("Ccy", "INR"))
+        _sub(tx, "IntrBkSttlmDt", r.get("IntrBkSttlmDt", "2026-06-29"))
+        _sub(tx, "ChrgBr", "SHAR")
+        _party(tx, "Dbtr", r.get("Dbtr_Nm", UNKNOWN), r.get("Dbtr_Ctry"))
+        _acct(tx, "DbtrAcct", r.get("DbtrAcct_Id", UNKNOWN), iban=False)
+        # IBAN on the creditor side when the instrument is BIC/IBAN (cross-border)
+        iban = r.get("identifier_type") == "BIC_IBAN"
+        _party(tx, "Cdtr", r.get("Cdtr_Nm", UNKNOWN), r.get("Cdtr_Ctry"))
+        _acct(tx, "CdtrAcct", r.get("CdtrAcct_Id", UNKNOWN), iban=iban)
+        # ultimate parties carried symmetrically (debtor AND creditor)
+        _ultmt(tx, "UltmtDbtr", r.get("UltmtDbtr_Nm", r.get("Dbtr_Nm", UNKNOWN)),
+               r.get("UltmtDbtr_Id"))
+        _ultmt(tx, "UltmtCdtr", r.get("UltmtCdtr_Nm", r.get("Cdtr_Nm", UNKNOWN)),
+               r.get("UltmtCdtr_Id"))
+
+    ET.indent(doc, space="  ")
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(doc, encoding="unicode")
+
+
+def main():
+    import argparse
+    import json
+
+    ap = argparse.ArgumentParser(description="Project pacs.008 XML -> feature rows")
+    ap.add_argument("--input", required=True, help="pacs.008 .xml file")
+    ap.add_argument("--out", default=None, help="optional CSV out; else prints JSON")
+    args = ap.parse_args()
+    df = parse_pacs008_frame(args.input)
+    if args.out:
+        df.to_csv(args.out, index=False)
+        print(f"projected {len(df)} transaction(s) -> {args.out}")
+    else:
+        print(json.dumps(df.to_dict(orient="records"), indent=2))
+
+
+if __name__ == "__main__":
+    main()

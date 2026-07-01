@@ -42,6 +42,16 @@ def decoder_stack(request):
 # Trainable trio: ψ subspaces + φ prefixes
 # --------------------------------------------------------------------------- #
 
+def test_train_keeps_frozen_base_in_eval(decoder_stack):
+    """freeze == deterministic: .train() must NOT re-enable dropout on the frozen
+    encoder / LLM (adapter mode), only on the trainable adapters."""
+    dec = decoder_stack["dec"]
+    dec.train(True)
+    assert dec.training is True                       # adapters in train mode
+    assert dec.encoder.training is False              # frozen encoder stays eval
+    assert decoder_stack["llm"].training is False     # frozen LLM stays eval
+
+
 def test_task_embedding_shared_and_unique_subspaces():
     te = TaskEmbedding(n_tasks=3, d_llm=16, shared_dim=6)
     ids = torch.tensor([0, 1, 2])

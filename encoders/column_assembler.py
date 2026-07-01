@@ -65,24 +65,42 @@ class ColumnVocabs:
 
     def encode(self, df) -> dict:
         """Project a DataFrame into the tensors/arrays ColumnAssembler.forward needs."""
+        from .coerce import canon_categorical
+
         def enc(col, vocab):
             unk = len(vocab)
-            mapped = df[col].astype(str).map(lambda v: vocab.get(v, unk))
+            mapped = canon_categorical(df[col]).map(lambda v: vocab.get(v, unk))
             return torch.as_tensor(mapped.to_numpy(), dtype=torch.long)
 
         return {
             "high_card": {c: enc(c, self.high_card[c]) for c in self.high_card},
             "core": {c: enc(c, self.core[c]) for c in self.core},
             "amount": df[self.numerical_col].to_numpy(dtype=np.float64),
-            "ccy": df[self.ccy_col].astype(str).to_numpy(),
+            "ccy": canon_categorical(df[self.ccy_col]).to_numpy(),
         }
+
+    def unk_rate(self, df) -> dict:
+        """Serve-time diagnostic: fraction of values mapping to UNK per categorical column.
+        A spike is the tell-tale of a dtype/vocab drift (e.g. int trained, float served)."""
+        from .coerce import canon_categorical
+        out = {}
+        for grp in (self.high_card, self.core):
+            for c, vocab in grp.items():
+                miss = ~canon_categorical(df[c]).isin(vocab.keys())
+                out[c] = float(miss.mean())
+        return out
 
 
 def build_vocabs(df, schema: dict) -> ColumnVocabs:
-    """Build per-column label encoders from data; buckets read from schema (§0.4)."""
+    """Build per-column label encoders from data; buckets read from schema (§0.4).
+
+    Categorical keys are canonicalised (encoders.coerce) so the SAME helper is used at
+    build and at encode time — int/float/str forms of a reference number collapse to one key.
+    """
+    from .coerce import canon_categorical
     high_card, high_card_freq = {}, {}
     for col in schema["buckets"]["high_card_categorical"]:
-        vc = df[col].astype(str).value_counts()        # descending frequency
+        vc = canon_categorical(df[col]).value_counts()  # descending frequency
         high_card[col] = {v: i for i, v in enumerate(vc.index)}
         freq = np.zeros(len(vc) + 1, dtype=np.float64)  # + UNK (freq 0)
         freq[: len(vc)] = vc.to_numpy()
@@ -90,7 +108,7 @@ def build_vocabs(df, schema: dict) -> ColumnVocabs:
 
     core = {}
     for col in schema["buckets"]["core"]:
-        core[col] = {v: i for i, v in enumerate(sorted(df[col].astype(str).unique()))}
+        core[col] = {v: i for i, v in enumerate(sorted(canon_categorical(df[col]).unique()))}
 
     numerical_col = schema["buckets"]["numerical"][0]
     ccy_col = "Ccy" if "Ccy" in schema["buckets"]["core"] else schema["buckets"]["core"][0]
