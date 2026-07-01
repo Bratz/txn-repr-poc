@@ -34,7 +34,7 @@ from data.synth_pacs008 import COLUMN_BUCKETS
 UNKNOWN = "Unknown"
 
 MSG_TYPES = ["pain.001", "pain.002", "pacs.008", "pacs.002", "camt.054",
-             "camt.056", "camt.029", "pacs.004"]
+             "camt.056", "camt.029", "pacs.004", "pacs.009"]
 # ISO 20022 transaction-status codes we use (TxSts). "" = not a status message.
 # The pacs.002 status IS the gpi-tracker in-flight backbone: ACSC (settled) / ACSP (in process,
 # with a Gnnn subcode) / RJCT (rejected/returned). CNCL/RJCR are the camt.029 recall outcomes.
@@ -71,6 +71,8 @@ OWNED = {
     "camt.029": {"IntrBkSttlmAmt", "Ccy"},
     # return: echoes the payment but with the PARTIES REVERSED (money flows back).
     "pacs.004": _ALL - {"SttlmMtd", "identifier_type"},
+    # cover: interbank FI-to-FI funding leg alongside a cross-border pacs.008 (cover method).
+    "pacs.009": {"IntrBkSttlmAmt", "Ccy", "IntrBkSttlmDt", "DbtrAcct_Id", "CdtrAcct_Id"},
 }
 
 # On a return (pacs.004) debtor and creditor swap: debtor↔creditor, their accounts, ultimate
@@ -183,6 +185,9 @@ def lifecycle_messages(pay_row, status, events):
         return _stamp_offsets(out, total)
     emit("pain.002", "ACCP")
     emit("pacs.008")
+    # cross-border cover method: a pacs.009 COV funds the correspondent alongside the pacs.008.
+    if pay_row.get("SttlmMtd") == "COVE":
+        emit("pacs.009")
 
     # --- clearing outcome ------------------------------------------------------ #
     auto_return = status == "REJECTED" and halt_exc == "account_closed"
@@ -283,4 +288,11 @@ if __name__ == "__main__":
     rrow = dict(base, cancel_requested=1, cancel_status="RJCR")
     rm = [m["msg_type"] for m in lifecycle_messages(rrow, "STP", [("credit", "none")])]
     assert "camt.029" in rm and "pacs.004" not in rm
+
+    # cover method (COVE) emits a pacs.009 alongside the pacs.008; non-cover does not.
+    cov = dict(base, SttlmMtd="COVE")
+    cseq = [m["msg_type"] for m in lifecycle_messages(cov, "STP", [("credit", "none")])]
+    assert cseq[:4] == ["pain.001", "pain.002", "pacs.008", "pacs.009"]
+    assert "pacs.009" not in [m["msg_type"] for m in
+                              lifecycle_messages(dict(base, SttlmMtd="CLRG"), "STP", [("credit", "none")])]
     print("iso_lifecycle self-check OK")

@@ -193,6 +193,21 @@ def test_cancellation_and_return_labels_consistent_with_messages():
     assert has("pacs.008")[pay["cancel_requested"].astype(bool)].all()
 
 
+def test_swift_cover_method_emits_pacs009_alongside_pacs008():
+    from data.synth_india_rails import build_messages
+    pay, evt, _ = _small()
+    msg = build_messages(pay, evt)
+    by = msg.groupby("payment_id")["msg_type"].agg(set)
+    has = lambda p, t: t in by.get(p, set())
+    # every SWIFT payment that reached clearing (has a pacs.008) carries a pacs.009 cover
+    for p in pay[pay.rail == "SWIFT"]["payment_id"]:
+        if has(p, "pacs.008"):
+            assert has(p, "pacs.009")
+    # domestic rails never emit a cover
+    for p in pay[pay.rail != "SWIFT"]["payment_id"]:
+        assert not has(p, "pacs.009")
+
+
 def test_cancellation_is_feature_modulated_by_amount():
     # cancellation is feature-modulated -> >Rs 1M payments are recalled more often. Checked on a
     # larger sample (the boosted subset is small; the effect is invisible at N=4000).

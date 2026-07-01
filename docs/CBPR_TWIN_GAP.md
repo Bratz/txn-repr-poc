@@ -48,7 +48,7 @@ Status: ✅ modelled · 🟡 partial · ❌ missing. **Owner** = who should prod
 | 1 | **Message lifecycle** pain.001→…→camt.054 | `iso_lifecycle.MSG_TYPES` w/ field ownership, TxSts, timestamps | ✅ | 🗄️ Data | — | — |
 | 2 | **gpi tracker status** ACSC/ACSP/RJCT (+Gnnn) | **relabelled ✅** — pacs.002 is the tracker backbone; held → `ACSP`+`G002`; schema `gpi_tracker` block | ✅ | 🧠 TFM + relabel | S | Med |
 | 3 | **Reject/return reason** (ISO StsRsn) | `reject_reason` + `REASON` map | ✅ | 🧠 TFM (select) + 📚 code string | — | High |
-| 4 | **pacs.009 / pacs.009 COV** (FI + cover) | pacs.008 only | ❌ | 🗄️ Data | M | High |
+| 4 | **pacs.009 / pacs.009 COV** (FI + cover) | **COV cover leg shipped** (every cross-border/COVE pacs.008 gets a pacs.009 cover); standalone FI-credit pacs.009 not modelled (all payments are customer transfers) | 🟡 | 🗄️ Data | M | High |
 | 5 | **Cancellation (camt.056 / camt.029)** + matching | **lifecycle legs + `cancel_requested`/`cancel_status` labels shipped**; likelihood head pending | 🟡 | 🗄️ Data ✅ + 🧠 TFM (likelihood) | M | High |
 | 6 | **Return (pacs.004)** + party-reversal | **lifecycle leg + reversed parties + `returned`/`return_reason` labels shipped**; likelihood head pending | 🟡 | 🗄️ Data ✅ + 🧠 TFM (likelihood) | M | High |
 | 7 | **Claim mgmt** (MT191/camt.106) | none | ❌ | 🗄️ Data / 📐 Rule | L | Low |
