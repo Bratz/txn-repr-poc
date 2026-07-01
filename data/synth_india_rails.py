@@ -359,6 +359,23 @@ def build_dataset(cfg: IndiaConfig):
         row["rail_family"] = rail                       # 1:1 in India; kept for parity
         row["identifier_type"] = identifier
         row["settlement_kind"] = RAILS[rail].settlement
+        # --- amount split: model the two-currency nature of cross-border + charges (Track D P1)
+        # IntrBkSttlmAmt/Ccy stay the interbank SETTLEMENT leg (as generated). We ADD the counter
+        # (instructed) leg via an FX rate, plus a charges fee. Domestic is 1:1 with a small flat
+        # fee. These are metadata/labels for a future FX/charges head - NOT encoder features yet,
+        # so no leakage into the numeric bucket. fx_rate is market noise (unpredictable); charges
+        # is bps-of-amount (a genuine regression target). Synthetic rate/fee - documented choice.
+        counter_ccy = dest.currency
+        if src.currency == counter_ccy:                          # domestic / same currency
+            fx_rate = 1.0
+            charges = min(25.0, max(5.0, row["IntrBkSttlmAmt"] * 0.0005))
+        else:                                                    # cross-border FX
+            fx_rate = round(float(np.exp(rng.normal(0.0, 0.4))), 4)
+            charges = row["IntrBkSttlmAmt"] * float(rng.uniform(0.001, 0.005)) + 500.0
+        row["InstdCcy"] = counter_ccy
+        row["InstdAmt"] = round(row["IntrBkSttlmAmt"] * fx_rate, 2)
+        row["fx_rate"] = fx_rate
+        row["charges"] = round(charges, 2)
         # mis-routed = the ATTEMPTED rail isn't eligible for this payment (the injected
         # over-cap / under-min cases). Their `rail` label is the attempt, not a valid route,
         # so routing-accuracy should exclude them (they exist to generate the exceptions).
@@ -494,6 +511,8 @@ def build_schema(pay_df, accs, msg_df=None) -> dict:
                               "settlement_kind", "SttlmMtd"],
         },
         "lifecycle": _lifecycle_block(msg_df),
+        # two-currency + charges metadata (labels for a future FX/charges head; not features).
+        "financial_columns": ["InstdAmt", "InstdCcy", "fx_rate", "charges"],
         "n_payments": int(len(pay_df)), "n_accounts": len(accs),
         "vocab": vocab_report(pay_df),
         "rail_distribution": pay_df["rail"].value_counts().to_dict(),

@@ -54,7 +54,7 @@ Status: ✅ modelled · 🟡 partial · ❌ missing. **Owner** = who should prod
 | 7 | **Claim mgmt** (MT191/camt.106) | none | ❌ | 🗄️ Data / 📐 Rule | L | Low |
 | 8 | **Investigation** (camt.026/028/029) | none | ❌ | 🗄️ Data | L | Low |
 | 9 | **Forwarding / passthrough** hops | endpoints only | ❌ | 🗄️ Data | M | Med |
-| 10 | **Charges / VAT + FX + value-dating** | single `IntrBkSttlmAmt` | 🟡 | 📐 Rule (charges/VAT/dates) + 🧠 TFM (FX amount) | M | High |
+| 10 | **Charges / VAT + FX + value-dating** | **amount split shipped** — `InstdAmt`/`InstdCcy`/`fx_rate`/`charges` (two-currency + fee labels); FX/charges head + value-dating pending | 🟡 | 📐 Rule (charges/VAT/dates) + 🧠 TFM (FX amount) | M | High |
 | 11 | **Geo-Cover** Dom/Intl/SEPA | `geo_label` (deterministic) | 🟡 | 📐 **Rule — delisted** | S | Med |
 | 12 | **ON-US / OFF-US** | not derived | ❌ | 📐 **Rule — delisted** | S | Med |
 | 13 | **Duplicate validation** | none | ❌ | 📐 **Rule — delisted** | S | Med |
@@ -163,8 +163,11 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
   `account_closed` post-settlement bounce → pacs.002 ACSC + pacs.004. Generator adds
   `cancel_requested` / `cancel_status` / `returned` / `return_reason` labels (cancellation
   feature-modulated → learnable). Label⟺message consistency + reversal unit-tested (177 pass).
-- **P1 · Amount split** (#10): `InstdAmt` vs `IntrBkSttlmAmt` + `charges` + `fx_rate` + value dates
-  (RED/DED/CED). Makes SWIFT non-degenerate. Touch: generator + `iso_lifecycle` ownership + Layer-1.
+- **P1 · Amount split** (#10) — ✅ **DONE (data leg).** Generator adds `InstdAmt` / `InstdCcy` /
+  `fx_rate` / `charges` (additive metadata/labels; IntrBkSttlmAmt/Ccy unchanged, no encoder ripple).
+  Domestic 1:1 + flat fee; cross-border FX + bps charge. `charges` is bps-of-amount (predictable →
+  future regression head); `fx_rate` is market noise. Value-dating (RED/DED/CED) still pending (Rule
+  track). FX/charges head is Track M P2.
 - **P1 · pacs.009 / pacs.009 COV** (#4) message types.
 - **P1 · Repair-type taxonomy** (#17): tag each exception auto-return / repair / reject + a queue.
 - **P2** · investigation camt.026/028/029 (#8) · passthrough (#9) · bulk order files (#20).

@@ -191,10 +191,28 @@ def test_cancellation_and_return_labels_consistent_with_messages():
     assert (pay["returned"].astype(bool) == has("pacs.004")).all()
     # a recall is only requested once the payment reached clearing (has a pacs.008)
     assert has("pacs.008")[pay["cancel_requested"].astype(bool)].all()
-    # cancellation is feature-modulated -> more likely on very large payments
+
+
+def test_cancellation_is_feature_modulated_by_amount():
+    # cancellation is feature-modulated -> >Rs 1M payments are recalled more often. Checked on a
+    # larger sample (the boosted subset is small; the effect is invisible at N=4000).
+    pay, _, _ = build_dataset(IndiaConfig(num_accounts=500, num_payments=15000, seed=23))
     big = pay[pay.IntrBkSttlmAmt > 1_000_000]["cancel_requested"].mean()
     rest = pay[pay.IntrBkSttlmAmt <= 1_000_000]["cancel_requested"].mean()
     assert big > rest
+
+
+def test_amount_split_models_fx_and_charges():
+    pay, _, _ = _small()
+    for c in ("InstdAmt", "InstdCcy", "fx_rate", "charges"):
+        assert c in pay.columns
+    dom = pay[pay.rail != "SWIFT"]
+    assert (dom["fx_rate"] == 1.0).all()                     # domestic: no FX
+    assert (dom["InstdAmt"] == dom["IntrBkSttlmAmt"]).all()  # 1:1
+    sw = pay[pay.rail == "SWIFT"]
+    assert (sw["InstdCcy"] != sw["Ccy"]).all()               # two currencies cross-border
+    assert (sw["fx_rate"] != 1.0).mean() > 0.9               # FX applied on (almost) all
+    assert (pay["charges"] > 0).all()                        # every payment carries a fee
 
 
 def test_reproducible():
