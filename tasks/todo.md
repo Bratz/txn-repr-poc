@@ -1,3 +1,24 @@
+# TODO — ISO 20022 lifecycle + predict-at-initiation (2026-07-01)
+
+Model the training data as the ISO message lifecycle (multi-source) and add lifecycle
+predictions; drop UPI for now.
+
+- [x] **Lifecycle model.** `data/iso_lifecycle.py` — 5 message types (pain.001/pain.002/
+  pacs.008/pacs.002/camt.054) with real field ownership, TxSts + ISO reason codes, emission
+  driven by where the workflow halted. Message timestamps (`t_offset_min`). Replaces
+  `enrichment_stages.py`. `data/synth_india_rails.build_messages` writes a 3rd table.
+- [x] **Drop UPI (reversible).** `IndiaConfig.domestic_rails=("RTGS","NEFT","IMPS")` + `allow`
+  filter in `rails.eligible_rails/choose_rail`. Registry untouched; opt back in per run.
+  KNOWN: limit_exceeded prevalence falls to ~0.1% (IMPS 5L is the only cap now).
+- [x] **A/B/C predict-at-initiation.** `run_impute.py` — STP outcome / reject reason / ETA
+  from the pain.001 view vs complete pacs.008, + imputation. `reject_reason` label added.
+- [x] **Mix pain.001 into pretraining.** `run_seq.frozen_embeddings(extra=)` opt-in.
+- [x] **D streaming outcome.** booked-prediction PR-AUC rises as the message prefix grows
+  (mean-pooled per-message embeddings; sequence encoder deferred — prefixes are short).
+- [x] Tests: `tests/test_iso_lifecycle.py`; UPI-path tests opt in explicitly. 173 pass.
+- [ ] Full (non-smoke) run for real A/B/C/D numbers (smoke encoder is near-chance).
+- [ ] OPTIONAL: restore limit_exceeded strength if the twin binary task must stay learnable.
+
 # TODO — post-review hardening
 
 Plan of record for the senior code-review follow-up (2026-06-30). Findings came from a

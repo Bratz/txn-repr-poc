@@ -104,17 +104,20 @@ def _band_weights(amount: float) -> dict:
 
 
 def eligible_rails(amount: float, identifier_type: str | None = None,
-                   xborder: bool = False) -> list[str]:
+                   xborder: bool = False, allow: set | None = None) -> list[str]:
     """Rails a payment may legally use, given amount / identifier / cross-border flag.
 
     Scope is the first filter: a cross-border payment can only use SWIFT, a domestic one
     only the four RBI/NPCI rails. Cap/min are then hard constraints. If identifier_type is
     given it further restricts: VPA -> UPI, MMID_MOBILE -> IMPS, BIC_IBAN -> SWIFT,
-    ACCT_IFSC -> RTGS/NEFT/IMPS.
+    ACCT_IFSC -> RTGS/NEFT/IMPS. `allow` (optional) restricts to a subset of rail names -
+    used to switch a rail off for a run (e.g. UPI) without touching the registry.
     """
     want = "xborder" if xborder else "domestic"
     out = []
     for name, r in RAILS.items():
+        if allow is not None and name not in allow:
+            continue
         if r.scope != want:
             continue
         if amount < r.min_amount:
@@ -128,13 +131,14 @@ def eligible_rails(amount: float, identifier_type: str | None = None,
 
 
 def choose_rail(amount: float, rng: np.random.Generator,
-                identifier_type: str | None = None, xborder: bool = False) -> str:
+                identifier_type: str | None = None, xborder: bool = False,
+                allow: set | None = None) -> str:
     """Route a payment to a rail: amount-band preference over the ELIGIBLE set, + noise.
 
     Cross-border -> SWIFT (the only xborder rail). Domestic falls back to NEFT (always
     eligible, no cap/min) if nothing else qualifies.
     """
-    elig = eligible_rails(amount, identifier_type, xborder)
+    elig = eligible_rails(amount, identifier_type, xborder, allow)
     if not elig:
         return "SWIFT" if xborder else "NEFT"
     w = _band_weights(amount)

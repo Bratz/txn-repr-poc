@@ -40,13 +40,20 @@ def embed_all_rows(encoder, full, n, device, batch_size=512):
     return torch.cat(out, dim=0)
 
 
-def frozen_embeddings(pay, schema, smoke, device, log=print):
+def frozen_embeddings(pay, schema, smoke, device, log=print, extra=None):
     """Build + pretrain the v1 encoder, FREEZE it, and return its per-row embeddings.
 
     The shared frozen-backbone step for the downstream-probe orchestrators
     (run_india / run_twin / run_golden). Returns (encoder, vocabs, e_pay, enc_cfg) where
-    e_pay is an (N, D) numpy array of frozen f(row) for every row.
+    e_pay is an (N, D) numpy array of frozen f(row) for every row of `pay`.
+
+    `extra` (optional): additional rows to MIX INTO PRETRAINING only (not embedded/returned).
+    Used to show the encoder sparse partial records (e.g. pain.001 initiation messages)
+    alongside the complete pacs.008 rows, so its masked reconstruction learns both. Vocabs are
+    built on `pay`; extra's not-yet-available fields land in the OOV bucket (the intended
+    'missing' signal).
     """
+    import pandas as pd
     from encoder.tabular_encoder import EncoderConfig, build_pretraining_stack
     from encoder.tabular_encoder import pretrain as enc_pretrain
     enc_cfg = (EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
@@ -54,8 +61,10 @@ def frozen_embeddings(pay, schema, smoke, device, log=print):
     torch.manual_seed(0)
     encoder, _, vocabs = build_pretraining_stack(pay, schema, enc_cfg, party_epochs=1)
     encoder.to(device)
-    log("[A] pretrain v1 encoder ...")
-    enc_pretrain(encoder, _to_device(vocabs.encode(pay), device), enc_cfg,
+    train_df = pay if extra is None or not len(extra) else pd.concat([pay, extra],
+                                                                     ignore_index=True)
+    log(f"[A] pretrain v1 encoder ...{'' if train_df is pay else f' (+{len(extra):,} partial rows)'}")
+    enc_pretrain(encoder, _to_device(vocabs.encode(train_df), device), enc_cfg,
                  batch_size=128 if smoke else 256)
     encoder.freeze()
     e_pay = embed_all_rows(encoder, vocabs.encode(pay), len(pay), device).cpu().numpy()

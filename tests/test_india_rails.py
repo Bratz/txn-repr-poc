@@ -87,6 +87,20 @@ def _small():
     return build_dataset(IndiaConfig(num_accounts=400, num_payments=4000, seed=23))
 
 
+def _with_upi():
+    # UPI is off by default now; the cap / all-rails routing tests opt it back in (the
+    # registry + routing still fully support it - it is a reversible run knob).
+    return build_dataset(IndiaConfig(num_accounts=400, num_payments=4000, seed=23,
+                                     domestic_rails=("RTGS", "NEFT", "IMPS", "UPI")))
+
+
+def test_default_run_excludes_upi():
+    pay, _, _ = _small()
+    assert "UPI" not in set(pay["rail"])                             # dropped for now
+    assert "VPA" not in set(pay["identifier_type"])                  # UPI-only instrument gone
+    assert {"RTGS", "NEFT", "IMPS", "SWIFT"} == set(pay["rail"])
+
+
 def test_emits_both_tables_with_rail_columns():
     pay, evt, accs = _small()
     assert len(pay) == 4000 and len(evt) > len(pay)
@@ -100,8 +114,8 @@ def test_emits_both_tables_with_rail_columns():
 
 
 def test_all_rails_present_with_swift_crossborder():
-    pay, _, _ = _small()
-    assert set(pay["rail"]) == set(RAIL_NAMES)                       # incl SWIFT
+    pay, _, _ = _with_upi()
+    assert set(pay["rail"]) == set(RAIL_NAMES)                       # incl UPI + SWIFT
     dom = pay[pay.rail != "SWIFT"]
     assert (dom["Ccy"] == "INR").all()                              # domestic rails: INR
     assert (dom["Dbtr_Ctry"] == "IN").all() and (dom["Cdtr_Ctry"] == "IN").all()
@@ -113,7 +127,7 @@ def test_all_rails_present_with_swift_crossborder():
 
 
 def test_over_cap_attempts_are_rejected_with_limit_exceeded():
-    pay, _, _ = _small()
+    pay, _, _ = _with_upi()
     bad = pay[(pay.rail == "UPI") & (pay.IntrBkSttlmAmt > RAILS["UPI"].cap)]
     assert len(bad) > 0                                              # injection produced some
     # an over-cap payment can be halted at an earlier step, but it can NEVER settle...
@@ -128,7 +142,7 @@ def test_over_cap_attempts_are_rejected_with_limit_exceeded():
 def test_eta_spread_across_rails():
     pay, _, _ = _small()
     eta = pay.groupby("rail")["time_to_settle_min"].mean()
-    assert eta["NEFT"] > eta["UPI"] and eta["NEFT"] > eta["IMPS"]    # batch latency shows
+    assert eta["NEFT"] > eta["IMPS"]                                # batch vs instant latency
     assert eta["SWIFT"] > eta["NEFT"]                               # correspondent slowest
 
 
@@ -150,7 +164,10 @@ def test_schema_task_manifest_and_twin_block():
     assert routing["label_column"] == "rail" and set(routing["label_values"]) == set(RAIL_NAMES)
     t = s["twin"]
     assert set(t["rails"]) == set(RAIL_NAMES) and set(t["workflow"]) == set(WORKFLOW)
-    assert t["twin_binary_tasks"] == ["exc_sla_breach", "exc_limit_exceeded"]
+    # deterministic gates (limit_exceeded/below_min) are DELISTED as TFM targets -> rule_computed;
+    # twin binary tasks are the stochastic exceptions.
+    assert t["twin_binary_tasks"] == ["exc_sla_breach", "exc_fraud_hold"]
+    assert "exc_limit_exceeded" in t["rule_computed"] and "is_mis_routed" in t["rule_computed"]
 
 
 def test_event_log_chronological_and_references_payments():
@@ -159,6 +176,25 @@ def test_event_log_chronological_and_references_payments():
     one = evt[evt.payment_id == evt.payment_id.iloc[0]]
     assert list(one["seq"]) == sorted(one["seq"])
     assert (one["t_min"].to_numpy()[1:] >= one["t_min"].to_numpy()[:-1]).all()
+
+
+def test_cancellation_and_return_labels_consistent_with_messages():
+    from data.synth_india_rails import build_messages
+    pay, evt, _ = _small()
+    msg = build_messages(pay, evt)
+    for col in ("cancel_requested", "cancel_status", "returned", "return_reason"):
+        assert col in pay.columns
+    by_pid = msg.groupby("payment_id")["msg_type"].agg(set)
+    has = lambda t: pay["payment_id"].map(lambda p: t in by_pid.get(p, set()))
+    # label <-> message presence must agree exactly
+    assert (pay["cancel_requested"].astype(bool) == has("camt.056")).all()
+    assert (pay["returned"].astype(bool) == has("pacs.004")).all()
+    # a recall is only requested once the payment reached clearing (has a pacs.008)
+    assert has("pacs.008")[pay["cancel_requested"].astype(bool)].all()
+    # cancellation is feature-modulated -> more likely on very large payments
+    big = pay[pay.IntrBkSttlmAmt > 1_000_000]["cancel_requested"].mean()
+    rest = pay[pay.IntrBkSttlmAmt <= 1_000_000]["cancel_requested"].mean()
+    assert big > rest
 
 
 def test_reproducible():

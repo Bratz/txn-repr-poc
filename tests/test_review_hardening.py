@@ -55,7 +55,9 @@ def test_party_encoder_unseen_attribute_maps_to_mask_not_crash():
 
 def test_is_mis_routed_flags_injected_gate_rows():
     from data.synth_india_rails import IndiaConfig, build_dataset
-    pay, _, _ = build_dataset(IndiaConfig(num_accounts=300, num_payments=4000, seed=23))
+    # opt UPI back in so the over-cap injected-gate path exists (off by default now).
+    pay, _, _ = build_dataset(IndiaConfig(num_accounts=300, num_payments=4000, seed=23,
+                                          domestic_rails=("RTGS", "NEFT", "IMPS", "UPI")))
     assert "is_mis_routed" in pay.columns
     # over-cap UPI and below-min RTGS attempts must be flagged mis-routed...
     over = pay[(pay.rail == "UPI") & (pay.IntrBkSttlmAmt > 100_000)]

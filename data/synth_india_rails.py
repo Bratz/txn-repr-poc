@@ -55,6 +55,7 @@ from data.rails import (
     IDENTIFIER_TYPES, RAILS, RAIL_NAMES, below_min, choose_rail, eligible_rails,
     sample_identifier, violates_cap,
 )
+from data.iso_lifecycle import PRE_SUBMISSION, REASON as LIFE_REASON
 
 # Rail-conditioned orchestration workflows (ordered steps).
 WORKFLOW = {
@@ -138,7 +139,13 @@ class IndiaConfig:
     # (real over-limit attempts are rarer) - a documented synthetic choice.
     over_cap_frac: float = 0.40
     under_min_rtgs_frac: float = 0.04  # share that attempt RTGS below the Rs 2L floor
+    # base share of in-flight payments the originator recalls (camt.056). Feature-modulated:
+    # higher for very large or fraud-flagged payments (so cancel-likelihood is learnable).
+    cancel_frac: float = 0.03
     inward_fraction: float = 0.45
+    # domestic rails enabled for this run. UPI is off by default for now (reversible - the
+    # registry still defines it); set to include "UPI" to bring the fourth rail back.
+    domestic_rails: tuple = ("RTGS", "NEFT", "IMPS")
     xborder_frac: float = 0.18       # share of payments that are cross-border (-> SWIFT)
     swift_amount_log_mu: float = 11.5    # ~ exp(11.5) ~ Rs 1L; cross-border skews larger
     swift_amount_log_sigma: float = 1.3
@@ -292,14 +299,21 @@ def _route_domestic(amount, rng, cfg):
 
     Returns (rail, identifier_type). Most payments route to an eligible rail; a small
     fraction deliberately attempt an over-cap or below-min rail to create the
-    limit_exceeded / below_min exceptions the twin must catch.
+    limit_exceeded / below_min exceptions the twin must catch. Routing is restricted to
+    cfg.domestic_rails (UPI is off by default now). NOTE: with UPI off the only capped
+    domestic rail is IMPS (Rs 5L), so over-cap attempts require amount > 5L and are rarer -
+    limit_exceeded prevalence drops accordingly (a consequence of dropping UPI, not a bug).
     """
-    if amount > 100_000 and rng.random() < cfg.over_cap_frac:
-        rail = "UPI" if amount <= 5_000_000 else "IMPS"   # wrong-rail attempt
+    allow = set(cfg.domestic_rails)
+    # over-cap wrong-rail attempt: pick an enabled capped rail whose cap this amount blows.
+    over = [r for r in cfg.domestic_rails
+            if RAILS[r].cap is not None and amount > RAILS[r].cap]
+    if over and rng.random() < cfg.over_cap_frac:
+        rail = min(over, key=lambda r: RAILS[r].cap)       # tightest cap it violates
         return rail, sample_identifier(rail, rng)
-    if amount < 200_000 and rng.random() < cfg.under_min_rtgs_frac:
+    if amount < 200_000 and "RTGS" in allow and rng.random() < cfg.under_min_rtgs_frac:
         return "RTGS", "ACCT_IFSC"                         # below-floor RTGS attempt
-    rail = choose_rail(amount, rng)
+    rail = choose_rail(amount, rng, allow=allow)
     return rail, sample_identifier(rail, rng)
 
 
@@ -352,6 +366,35 @@ def build_dataset(cfg: IndiaConfig):
         row["is_mis_routed"] = int(rail not in eligible_rails(amount, _id, xborder))
         row["direction"] = direction
         row["terminal_status"] = status
+        # reject/hold reason as an ISO status-reason code (label for reason prediction).
+        # Only non-settled payments carry a reason; STP/REPAIRED settle cleanly -> "none".
+        halt_exc = next((e[1] for e in reversed(events) if e[1] in exceptions), None)
+        halt_step = next((e[0] for e in reversed(events) if e[1] in exceptions), None)
+        row["reject_reason"] = (LIFE_REASON.get(halt_exc, "NARR")
+                                if status in ("REJECTED", "MANUAL_REVIEW") else "none")
+
+        # --- cancellation (camt.056) + return (pacs.004) legs & labels --------------- #
+        # A payment is recallable once it reached interbank clearing (not pre-submission
+        # rejected). Recall probability is feature-modulated so it is learnable.
+        reached_clearing = not (status == "REJECTED" and halt_step in PRE_SUBMISSION)
+        p_cancel = cfg.cancel_frac * (1 + 2 * int(amount > 1_000_000)
+                                      + int("fraud_hold" in exceptions))
+        cancel_requested = reached_clearing and rng.random() < min(p_cancel, 0.5)
+        cancel_status = "none"
+        if cancel_requested:
+            if status == "MANUAL_REVIEW":                 # held -> easy to stop, never credited
+                cancel_status = "CNCL"
+            elif status in ("STP", "REPAIRED"):           # already credited -> recall may be late
+                cancel_status = "CNCL" if rng.random() < 0.35 else "RJCR"
+            else:                                         # REJECTED -> nothing to recall
+                cancel_status = "CNCL"
+        auto_return = status == "REJECTED" and halt_exc == "account_closed"
+        recall_return = cancel_requested and cancel_status == "CNCL" and status in ("STP", "REPAIRED")
+        row["cancel_requested"] = int(cancel_requested)
+        row["cancel_status"] = cancel_status
+        row["returned"] = int(auto_return or recall_return)
+        row["return_reason"] = (LIFE_REASON["account_closed"] if auto_return
+                                else ("CUST" if recall_return else "none"))
         row["time_to_settle_min"] = round(seconds / 60.0, 3)
         for code in EXCEPTION_CODES:
             row[f"exc_{code}"] = int(code in exceptions)
@@ -367,6 +410,21 @@ def build_dataset(cfg: IndiaConfig):
     return pd.DataFrame(pay_rows), pd.DataFrame(evt_rows), in_accs + fgn_accs
 
 
+def build_messages(pay_df, evt_df) -> pd.DataFrame:
+    """Derive the ISO 20022 message-lifecycle table (multi-source) from the payment + event
+    tables: one row per (payment, message) sharing an end_to_end_id. Post-hoc so build_dataset's
+    signature is untouched. The halting cause per payment comes from its event log."""
+    from data.iso_lifecycle import lifecycle_messages
+
+    ev_by_pid = {pid: list(zip(g["step"], g["excode"]))
+                 for pid, g in evt_df.groupby("payment_id", sort=False)}
+    rows = []
+    for pr in pay_df.to_dict("records"):
+        events = ev_by_pid.get(pr["payment_id"], [])
+        rows.extend(lifecycle_messages(pr, pr["terminal_status"], events))
+    return pd.DataFrame(rows)
+
+
 # Downstream task manifest (read from schema; never hard-coded by trainers - paper rule).
 def _tasks():
     from data.synth_pacs008 import EXPENSE_TYPES, GEO_SPANS
@@ -378,6 +436,12 @@ def _tasks():
          "label_values": RAIL_NAMES, "metric": "multiclass", "records": "single"},
         # §5 single-record tasks. In India mode geography is limited to Asia (domestic) vs
         # International (cross-border SWIFT); expense varies by creditor industry.
+        # NOTE: geo_label (assign_geo) and expense_label (assign_expense) are DETERMINISTIC
+        # (no rng) - Geo-Cover is a country rule, expense an industry lookup. In the PRODUCT
+        # twin these are rule/lookup-handled (delisted as TFM predictions). They are KEPT here
+        # unchanged because they are the paper's §5 tagging tasks and the evidence for C2
+        # (CatBoost beats the frozen adapter on exactly such feature-rule labels). Fidelity: do
+        # not remove. See docs/CBPR_TWIN_GAP.md "TFM-owned vs rule/lookup/template".
         {"name": "geography", "label_column": "geo_label",
          "label_values": GEO_SPANS, "metric": "multiclass", "records": "single"},
         {"name": "expense", "label_column": "expense_label",
@@ -385,7 +449,22 @@ def _tasks():
     ]
 
 
-def build_schema(pay_df, accs) -> dict:
+def _lifecycle_block(msg_df=None) -> dict:
+    from data.iso_lifecycle import ENRICH_ADDS, MSG_TYPES, OWNED, REASON, TX_STS
+    block = {
+        "msg_types": MSG_TYPES, "tx_sts": TX_STS,
+        "enrich_adds": ENRICH_ADDS,                          # nested availability (imputation)
+        "owned_columns": {m: sorted(OWNED[m]) for m in MSG_TYPES},
+        "reason_codes": REASON,
+        "id_column": "end_to_end_id", "type_column": "msg_type", "status_column": "tx_sts",
+    }
+    if msg_df is not None and len(msg_df):
+        block["msg_type_distribution"] = msg_df["msg_type"].value_counts().to_dict()
+        block["tx_sts_distribution"] = msg_df["tx_sts"].value_counts().to_dict()
+    return block
+
+
+def build_schema(pay_df, accs, msg_df=None) -> dict:
     # identifier_type is a legitimate intake feature; rail / settlement_kind / SttlmMtd are
     # NOT features for routing (they are the label or 1:1 consequences of it - SttlmMtd is
     # derived from the rail here, so keeping it would leak the label). Drop SttlmMtd from
@@ -402,8 +481,16 @@ def build_schema(pay_df, accs) -> dict:
             "exc_columns": [f"exc_{c}" for c in EXCEPTION_CODES],
             "status_column": "terminal_status", "eta_column": "time_to_settle_min",
             "rail_column": "rail", "id_column": "payment_id",
-            "twin_binary_tasks": ["exc_sla_breach", "exc_limit_exceeded"],
+            # Twin binary tasks are STOCHASTIC, feature-driven exceptions (genuine predictions).
+            # DELISTED as TFM targets: exc_limit_exceeded / exc_below_min are deterministic hard
+            # gates (violates_cap / below_min) - compute them by rule, don't predict them. So is
+            # is_mis_routed (rail not in eligible_rails). sla_breach (TIMEOUT_P) and fraud_hold
+            # (feature-driven probability) are real predictions and stay.
+            "twin_binary_tasks": ["exc_sla_breach", "exc_fraud_hold"],
+            "rule_computed": ["exc_limit_exceeded", "exc_below_min", "is_mis_routed",
+                              "settlement_kind", "SttlmMtd"],
         },
+        "lifecycle": _lifecycle_block(msg_df),
         "n_payments": int(len(pay_df)), "n_accounts": len(accs),
         "vocab": vocab_report(pay_df),
         "rail_distribution": pay_df["rail"].value_counts().to_dict(),
@@ -426,14 +513,15 @@ def main():
 
     cfg = IndiaConfig(num_accounts=args.accounts, num_payments=args.payments, seed=args.seed)
     pay_df, evt_df, accs = build_dataset(cfg)
-    for df, suffix in [(pay_df, "payments"), (evt_df, "events")]:
+    msg_df = build_messages(pay_df, evt_df)
+    for df, suffix in [(pay_df, "payments"), (evt_df, "events"), (msg_df, "messages")]:
         path = f"{args.out_prefix}_{suffix}.parquet"
         try:
             df.to_parquet(path, index=False)
         except Exception:
             path = path.replace(".parquet", ".csv"); df.to_csv(path, index=False)
         print(f"wrote {len(df):,} rows -> {path}")
-    schema = build_schema(pay_df, accs)
+    schema = build_schema(pay_df, accs, msg_df)
     Path(args.schema_out).write_text(json.dumps(schema, indent=2))
     print(f"rails:  {schema['rail_distribution']}")
     print(f"ccy:    {schema['currency_distribution']}")
