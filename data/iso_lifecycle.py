@@ -8,7 +8,7 @@ Credit-transfer lifecycle (three ISO domains):
     pain.001  Initiation   acquisition - corporate -> debtor agent (InstdAmt, parties)
     pain.002  Initiation   status back to corporate (ACCP / RJCT)
     pacs.008  Clearing      interbank credit transfer (the ENRICHED complete record)
-    pacs.002  Clearing      interbank settlement status (ACSC / PDNG / RJCT)
+    pacs.002  Clearing      interbank settlement status = gpi tracker (ACSC / ACSP+G002 / RJCT)
     camt.054  Cash Mgmt     beneficiary credited (BOOK) - the true end state
 
 Two shapes, not one nested ladder:
@@ -36,8 +36,14 @@ UNKNOWN = "Unknown"
 MSG_TYPES = ["pain.001", "pain.002", "pacs.008", "pacs.002", "camt.054",
              "camt.056", "camt.029", "pacs.004"]
 # ISO 20022 transaction-status codes we use (TxSts). "" = not a status message.
-# CNCL/RJCR are the gSRP/camt.029 cancellation-resolution outcomes.
-TX_STS = ["", "ACCP", "ACSC", "ACSP", "PDNG", "RJCT", "BOOK", "CNCL", "RJCR"]
+# The pacs.002 status IS the gpi-tracker in-flight backbone: ACSC (settled) / ACSP (in process,
+# with a Gnnn subcode) / RJCT (rejected/returned). CNCL/RJCR are the camt.029 recall outcomes.
+TX_STS = ["", "ACCP", "ACSC", "ACSP", "RJCT", "BOOK", "CNCL", "RJCR"]
+# gpi tracker ACSP subcodes (SWIFT gpi / CBPR+). G002 is emitted for a held/in-repair payment;
+# G001 (forwarded to a non-GPI agent) is supported by the vocab but not produced synthetically
+# here (no agent-membership / forwarding modelled).
+GPI_SUBCODES = {"G001": "forwarded to a non-GPI agent",
+                "G002": "in repair / awaiting manual action"}
 
 # All columns the encoder reads (india schema = v1 buckets + identifier_type).
 _HIGH_CARD = list(COLUMN_BUCKETS["high_card_categorical"])
@@ -186,8 +192,8 @@ def lifecycle_messages(pay_row, status, events):
             emit("pacs.004", "", return_reason or REASON["account_closed"], reverse=True)
         else:                                # rejected before/at settlement
             emit("pacs.002", "RJCT", reason)
-    elif status == "MANUAL_REVIEW":          # held, not settled, not booked
-        emit("pacs.002", "PDNG")
+    elif status == "MANUAL_REVIEW":          # held in repair -> gpi tracker ACSP + G002
+        emit("pacs.002", "ACSP", "G002")
     else:                                    # STP / REPAIRED: settled and credited
         emit("pacs.002", "ACSC")
         emit("camt.054", "BOOK")
@@ -247,7 +253,7 @@ if __name__ == "__main__":
     assert clr[-1] == ("pacs.002", "RJCT", "ED05"), clr
     # manual review -> settlement pending, never booked.
     mr = chain("MANUAL_REVIEW", [("aml", "none"), ("npci_switch", "technical_decline")])
-    assert [m for m, _, _ in mr][-1] == "pacs.002" and mr[-1][1] == "PDNG"
+    assert mr[-1] == ("pacs.002", "ACSP", "G002")          # gpi tracker: in repair
 
     # pain.001 blanks the four not-yet-available columns; pacs.008 keeps all.
     p1 = _project_message(base, "pain.001")

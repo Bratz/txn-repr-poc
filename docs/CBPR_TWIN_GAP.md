@@ -46,7 +46,7 @@ Status: ✅ modelled · 🟡 partial · ❌ missing. **Owner** = who should prod
 | # | Capability (standard) | Twin today | Status | Owner | Effort | Value |
 |---|---|---|---|---|---|---|
 | 1 | **Message lifecycle** pain.001→…→camt.054 | `iso_lifecycle.MSG_TYPES` w/ field ownership, TxSts, timestamps | ✅ | 🗄️ Data | — | — |
-| 2 | **gpi tracker status** ACSC/ACSP/RJCT (+Gnnn) | `TX_STS` has ACSC/ACSP/PDNG/RJCT; not named as tracker | 🟡 | 🧠 TFM + relabel | S | Med |
+| 2 | **gpi tracker status** ACSC/ACSP/RJCT (+Gnnn) | **relabelled ✅** — pacs.002 is the tracker backbone; held → `ACSP`+`G002`; schema `gpi_tracker` block | ✅ | 🧠 TFM + relabel | S | Med |
 | 3 | **Reject/return reason** (ISO StsRsn) | `reject_reason` + `REASON` map | ✅ | 🧠 TFM (select) + 📚 code string | — | High |
 | 4 | **pacs.009 / pacs.009 COV** (FI + cover) | pacs.008 only | ❌ | 🗄️ Data | M | High |
 | 5 | **Cancellation (camt.056 / camt.029)** + matching | **lifecycle legs + `cancel_requested`/`cancel_status` labels shipped**; likelihood head pending | 🟡 | 🗄️ Data ✅ + 🧠 TFM (likelihood) | M | High |
@@ -170,8 +170,9 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
 - **P2** · investigation camt.026/028/029 (#8) · passthrough (#9) · bulk order files (#20).
 
 ### Track M — TFM / ML predictions (the model's actual job)
-- **P0 · Relabel status → gpi tracker** (#2): map `ACSP`→`G001`/`G002`, expose pacs.002/tracker as the
-  in-flight backbone. Pure relabel of existing `tx_sts`/`reject_reason` — no new training.
+- **P0 · Relabel status → gpi tracker** (#2) — ✅ **DONE.** pacs.002 is the tracker backbone; held
+  payment → `ACSP`+`G002` (was `PDNG`); `GPI_SUBCODES` (G001/G002) + a `gpi_tracker` schema block.
+  Pure relabel — no new training.
 - **P1 · Cancellation-likelihood + return-likelihood heads** (#5, #6) — ✅ **wired** (`run_impute` E/F):
   PR-AUC probes on `f(pain.001/pacs.008)` → "will a camt.056 / pacs.004 arrive?", NaN-guarded for rare
   labels, reported vs prevalence baseline. Smoke sits at no-skill (untrained encoder + rare labels);

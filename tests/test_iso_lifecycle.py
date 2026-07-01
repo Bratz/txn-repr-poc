@@ -48,10 +48,10 @@ def test_clearing_reject_stops_at_pacs002():
     assert clr[-1] == ("pacs.002", "RJCT", "ED05")           # pacs.008 sent, no camt.054
 
 
-def test_manual_review_settles_pending_never_booked():
+def test_manual_review_maps_to_gpi_tracker_acsp_g002_never_booked():
     mr = _chain("MANUAL_REVIEW", [("aml", "none"), ("npci_switch", "technical_decline")])
     assert [m for m, _, _ in mr][-1] == "pacs.002"
-    assert mr[-1][1] == "PDNG"
+    assert mr[-1][1:] == ("ACSP", "G002")                  # gpi tracker: in repair, not booked
 
 
 def test_account_closed_bounces_to_return_with_reversed_parties():

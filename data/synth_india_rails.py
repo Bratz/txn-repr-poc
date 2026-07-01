@@ -450,12 +450,15 @@ def _tasks():
 
 
 def _lifecycle_block(msg_df=None) -> dict:
-    from data.iso_lifecycle import ENRICH_ADDS, MSG_TYPES, OWNED, REASON, TX_STS
+    from data.iso_lifecycle import ENRICH_ADDS, GPI_SUBCODES, MSG_TYPES, OWNED, REASON, TX_STS
     block = {
         "msg_types": MSG_TYPES, "tx_sts": TX_STS,
         "enrich_adds": ENRICH_ADDS,                          # nested availability (imputation)
         "owned_columns": {m: sorted(OWNED[m]) for m in MSG_TYPES},
         "reason_codes": REASON,
+        # pacs.002 IS the gpi tracker in-flight backbone.
+        "gpi_tracker": {"status_codes": ["ACSC", "ACSP", "RJCT"], "subcodes": GPI_SUBCODES,
+                        "status_message": "pacs.002", "recall_resolution": "camt.029 (CNCL/RJCR)"},
         "id_column": "end_to_end_id", "type_column": "msg_type", "status_column": "tx_sts",
     }
     if msg_df is not None and len(msg_df):
