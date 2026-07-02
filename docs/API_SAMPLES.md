@@ -1,15 +1,14 @@
 # API samples — txn-repr India advisory scorer
 
-All requests/responses below were captured live against `api_india:app` (bundle `model_india`, CPU). Start the server with:
+Captured live against `api_india:app` (bundle `model_india`, CPU, **calibrated**). Start:
 
 ```bash
 MODEL_DIR=model_india uvicorn api_india:app --port 8000
 ```
 
-> Scores are uncalibrated balanced-probe rankings (see docs/CBPR_TWIN_GAP.md): use them to rank and alert, not as literal percentages. cancel/return probas especially are rank-only (rare classes).
+> All probabilities are **isotonic-calibrated on held-out data** (`meta.calibrated: true`) — they are readable as probabilities. Remaining caveats: synthetic training data; weak heads (status/reason) stay weak, calibration fixes the scale not the skill; cold-start accounts degrade (watch rail_conf).
 
-## 1. GET /model/meta — the bundle contract
-
+## 1. GET /model/meta
 ```bash
 curl http://localhost:8000/model/meta
 ```
@@ -53,19 +52,15 @@ curl http://localhost:8000/model/meta
   ],
   "hidden": 512,
   "inflight": true,
+  "velocity": true,
+  "calibrated": true,
   "model_dir": "model_india"
 }
 ```
 
-## 2. POST /score/intake — JSON payment row (minimal: the 19 feature fields)
+## 2. POST /score/intake — JSON payment row (the 19 feature fields)
 
-Labels/extra columns are ignored if present; this is all the model reads.
-
-```bash
-curl -X POST http://localhost:8000/score/intake -H 'Content-Type: application/json' -d @intake.json
-```
-
-**intake.json**
+**Request**
 ```json
 {
   "payments": [
@@ -94,7 +89,8 @@ curl -X POST http://localhost:8000/score/intake -H 'Content-Type: application/js
 }
 ```
 
-**Response 200**
+**Response 200** (exception scores are calibrated rates now, not balanced rankings)
+
 ```json
 {
   "model": "model_india",
@@ -109,16 +105,16 @@ curl -X POST http://localhost:8000/score/intake -H 'Content-Type: application/js
       "expense_pred": "Operational",
       "top_exception_risks": [
         {
-          "code": "sla_breach",
-          "score": 0.7
-        },
-        {
-          "code": "beneficiary_unreachable",
-          "score": 0.39
-        },
-        {
           "code": "below_min",
-          "score": 0.3
+          "score": 0.04
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "technical_decline",
+          "score": 0.03
         }
       ]
     }
@@ -128,13 +124,11 @@ curl -X POST http://localhost:8000/score/intake -H 'Content-Type: application/js
 
 ## 3. POST /score/intake — raw ISO 20022 pacs.008 XML
 
-One result per `CdtTrfTxInf`. Enrichment-only fields (industries) default to Unknown unless supplied.
-
 ```json
-{"pacs008_xml": "<?xml version=\"1.0\" ... <FIToFICstmrCdtTrf> ... "}
+{"pacs008_xml": "<?xml ... <FIToFICstmrCdtTrf> ..."}
 ```
 
-**Response 200**
+**Response 200** — one result per CdtTrfTxInf
 ```json
 {
   "model": "model_india",
@@ -151,15 +145,15 @@ One result per `CdtTrfTxInf`. Enrichment-only fields (industries) default to Unk
       "top_exception_risks": [
         {
           "code": "no_route",
-          "score": 0.97
-        },
-        {
-          "code": "fx_fail",
-          "score": 0.93
+          "score": 0.09
         },
         {
           "code": "sanctions_hit",
-          "score": 0.86
+          "score": 0.07
+        },
+        {
+          "code": "format_error",
+          "score": 0.05
         }
       ]
     },
@@ -174,16 +168,16 @@ One result per `CdtTrfTxInf`. Enrichment-only fields (industries) default to Unk
       "expense_pred": "Operational",
       "top_exception_risks": [
         {
-          "code": "fx_fail",
-          "score": 0.99
-        },
-        {
           "code": "sanctions_hit",
-          "score": 0.99
+          "score": 0.18
         },
         {
           "code": "no_route",
-          "score": 0.52
+          "score": 0.05
+        },
+        {
+          "code": "fx_fail",
+          "score": 0.04
         }
       ]
     }
@@ -191,51 +185,9 @@ One result per `CdtTrfTxInf`. Enrichment-only fields (industries) default to Unk
 }
 ```
 
-## 4. POST /score/inflight — pain.001 only (all predicted future states)
+## 4. POST /score/inflight — the predicted-lifecycle object
 
-The minimal prefix: one initiation message. Unowned fields are 'Unknown' by design.
-
-**Request**
-```json
-{
-  "messages": [
-    {
-      "end_to_end_id": "E2E-00020002",
-      "payment_id": 20002,
-      "seq": 0,
-      "t_offset_min": 0.0,
-      "msg_type": "pain.001",
-      "msg_direction": "IN",
-      "tx_sts": null,
-      "sts_reason": null,
-      "rail": "IMPS",
-      "direction": "outward",
-      "DbtrAcct_Id": "YAEN26UU",
-      "CdtrAcct_Id": "IYYSS6AE",
-      "UltmtDbtr_Id": "Y2Q6OP",
-      "UltmtCdtr_Id": "Unknown",
-      "IntrBkSttlmAmt": 5934.94,
-      "Ccy": "INR",
-      "IntrBkSttlmDt": "Unknown",
-      "SttlmMtd": "Unknown",
-      "identifier_type": "ACCT_IFSC",
-      "Dbtr_Nm": "Granite Pte Holdings",
-      "Cdtr_Nm": "Harbor Inc Capital",
-      "UltmtDbtr_Nm": "Granite Pte",
-      "UltmtCdtr_Nm": "Unknown",
-      "Dbtr_Ctry": "IN",
-      "Cdtr_Ctry": "IN",
-      "Dbtr_Industry": "Industrials",
-      "Cdtr_Industry": "Communications",
-      "Dbtr_SubIndustry": "Manufacturing",
-      "Cdtr_SubIndustry": "Media",
-      "visible": 1
-    }
-  ]
-}
-```
-
-**Response 200 — the predicted-lifecycle object**
+**pain.001 only** (all future states, calibrated):
 ```json
 {
   "model": "model_india",
@@ -244,32 +196,27 @@ The minimal prefix: one initiation message. Unowned fields are 'Unknown' by desi
       "end_to_end_id": "E2E-00020002",
       "n_msgs": 1,
       "last_msg_type": "pain.001",
-      "booked_proba": 0.1867,
+      "booked_proba": 0.8421,
       "settlement_outcome": {
-        "MANUAL_REVIEW": 0.6741,
-        "REJECTED": 0.1057,
-        "REPAIRED": 0.1089,
-        "STP": 0.1113
+        "MANUAL_REVIEW": 0.121,
+        "REJECTED": 0.0339,
+        "REPAIRED": 0.0964,
+        "STP": 0.7487
       },
       "eta_remaining_min": 0.4,
       "reject_reason_if_failed": {
         "code": "BE06",
         "score": 0.5042
       },
-      "cancel_proba": 0.9384,
-      "return_proba": 0.6303
+      "cancel_proba": 0.1907,
+      "return_proba": 0.046
     }
   ]
 }
 ```
 
-## 5. POST /score/inflight — full stream (outcome messages arrived)
+**Full stream** (outcome messages arrived — booked snaps, ETA-remaining hits 0):
 
-Same UETR after pacs.002 ACSC + camt.054 BOOK: booked snaps ~1, ETA-remaining -> 0, outcome converges to STP.
-
-**Request**: same shape, all 5 messages.
-
-**Response 200**
 ```json
 {
   "model": "model_india",
@@ -278,46 +225,28 @@ Same UETR after pacs.002 ACSC + camt.054 BOOK: booked snaps ~1, ETA-remaining ->
       "end_to_end_id": "E2E-00020002",
       "n_msgs": 5,
       "last_msg_type": "camt.054",
-      "booked_proba": 0.9941,
+      "booked_proba": 0.9967,
       "settlement_outcome": {
-        "MANUAL_REVIEW": 0.0015,
-        "REJECTED": 0.0029,
-        "REPAIRED": 0.3439,
-        "STP": 0.6517
+        "MANUAL_REVIEW": 0.0081,
+        "REJECTED": 0.0177,
+        "REPAIRED": 0.115,
+        "STP": 0.8591
       },
       "eta_remaining_min": 0.0,
       "reject_reason_if_failed": {
         "code": "RR04",
         "score": 0.0015
       },
-      "cancel_proba": 0.8425,
-      "return_proba": 0.4231
+      "cancel_proba": 0.0588,
+      "return_proba": 0.0352
     }
   ]
 }
 ```
 
-## 6. Error responses
+## 5. POST /score/velocity — per-account burst (stateless; engine sends the history)
 
-```json
-// POST /score/intake with empty body -> 422
-{
-  "detail": "provide `payments` rows or `pacs008_xml`"
-}
-
-// POST /score/inflight with malformed rows -> 422
-{
-  "detail": "messages are missing columns: ['end_to_end_id', 'msg_type', 'seq']"
-}
-```
-
-A bundle without the in-flight heads returns **409** with a retrain hint.
-
-## 7. POST /score/velocity — per-account burst (stateless: engine sends the history)
-
-Request: `{"transactions": [ <an account's recent payment rows, >=2> ]}` — needs `DbtrAcct_Id` + `IntrBkSttlmDt` + the feature columns.
-
-**Response 200** (`burst_proba` = learned time-aware head — uncalibrated ranking; `burst_rule` = the transparent last-gaps rule, returned for comparison):
+Needs `DbtrAcct_Id` + `IntrBkSttlmDt` + feature columns, >=2 rows per account. `burst_proba` calibrated; `burst_rule` = transparent last-gaps rule for comparison.
 
 ```json
 {
@@ -326,90 +255,87 @@ Request: `{"transactions": [ <an account's recent payment rows, >=2> ]}` — nee
     {
       "actor": "ET6FRDFR",
       "n_txns": 11,
-      "burst_proba": 0.9557,
+      "burst_proba": 0.4444,
       "burst_rule": 0
     },
     {
       "actor": "KWQ5Q4GZ",
       "n_txns": 11,
-      "burst_proba": 0.9962,
+      "burst_proba": 0.5,
       "burst_rule": 1
+    },
+    {
+      "actor": "RNVX5X4Q",
+      "n_txns": 11,
+      "burst_proba": 0.32,
+      "burst_rule": 0
     },
     {
       "actor": "STIZ7XQD",
       "n_txns": 11,
-      "burst_proba": 0.8586,
+      "burst_proba": 0.1455,
+      "burst_rule": 0
+    },
+    {
+      "actor": "TTUFMYXQ",
+      "n_txns": 11,
+      "burst_proba": 0.5,
       "burst_rule": 0
     }
   ]
 }
 ```
 
+## 6. POST /score/intake with `explain: true` — faithful drivers (column occlusion)
 
-## 8. POST /score/intake with `"explain": true` — faithful drivers (column occlusion)
-
-Capped at 10 payments/request (~20x embed cost). `drivers` = top fields by impact: occlude the field, re-embed, measure the probability/ETA shift. No LLM involved.
+Capped at 10 payments (~20x embed cost). Occlude a field -> re-embed -> measure the shift. No LLM.
 
 ```json
+[
+  {
+    "field": "CdtrAcct_Id",
+    "rail_impact": 0.5544,
+    "risk_impact": 0.1276,
+    "eta_impact_min": -466.3
+  },
+  {
+    "field": "Ccy",
+    "rail_impact": -0.032,
+    "risk_impact": 0.644,
+    "eta_impact_min": 34.0
+  },
+  {
+    "field": "DbtrAcct_Id",
+    "rail_impact": 0.5477,
+    "risk_impact": -0.1028,
+    "eta_impact_min": -371.6
+  },
+  {
+    "field": "UltmtCdtr_Id",
+    "rail_impact": -0.0664,
+    "risk_impact": 0.2246,
+    "eta_impact_min": -14.8
+  },
+  {
+    "field": "identifier_type",
+    "rail_impact": -0.2732,
+    "risk_impact": 0.0023,
+    "eta_impact_min": -177.5
+  }
+]
+```
+
+## 7. Errors
+```json
+// empty intake -> 422
 {
-  "model": "model_india",
-  "results": [
-    {
-      "payment_id": 20000,
-      "rail_pred": "IMPS",
-      "rail_conf": 0.599,
-      "status_pred": "STP",
-      "eta_min_pred": 4.7,
-      "risk_pred": "Low",
-      "geography_pred": "Asia",
-      "expense_pred": "Operational",
-      "top_exception_risks": [
-        {
-          "code": "sla_breach",
-          "score": 0.7
-        },
-        {
-          "code": "beneficiary_unreachable",
-          "score": 0.39
-        },
-        {
-          "code": "below_min",
-          "score": 0.3
-        }
-      ],
-      "drivers": [
-        {
-          "field": "CdtrAcct_Id",
-          "rail_impact": 0.5544,
-          "risk_impact": 0.1276,
-          "eta_impact_min": -466.3
-        },
-        {
-          "field": "Ccy",
-          "rail_impact": -0.032,
-          "risk_impact": 0.644,
-          "eta_impact_min": 34.0
-        },
-        {
-          "field": "DbtrAcct_Id",
-          "rail_impact": 0.5477,
-          "risk_impact": -0.1028,
-          "eta_impact_min": -371.6
-        },
-        {
-          "field": "UltmtCdtr_Id",
-          "rail_impact": -0.0664,
-          "risk_impact": 0.2246,
-          "eta_impact_min": -14.8
-        },
-        {
-          "field": "identifier_type",
-          "rail_impact": -0.2732,
-          "risk_impact": 0.0023,
-          "eta_impact_min": -177.5
-        }
-      ]
-    }
-  ]
+  "detail": "provide `payments` rows or `pacs008_xml`"
+}
+
+// malformed stream -> 422
+{
+  "detail": "messages are missing columns: ['end_to_end_id', 'msg_type', 'seq']"
 }
 ```
+
+Bundle without in-flight/velocity heads -> **409** with a retrain hint.
