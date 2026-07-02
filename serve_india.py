@@ -56,55 +56,92 @@ def _embed_messages(encoder, vocabs, msg, device):
     return embed_all_rows(encoder, vocabs.encode(msg), len(msg), device).cpu().numpy()
 
 
-def _prefix_features(pool, last_row):
-    """In-flight feature vector = mean-pooled embeddings + one-hot(last msg_type, last tx_sts).
+def _prefix_times(g):
+    """(t_last, gap_since_previous) in minutes for a prefix's rows; zeros if absent."""
+    if "t_offset_min" not in g.columns:
+        return 0.0, 0.0
+    t = np.nan_to_num(g["t_offset_min"].to_numpy(dtype=float))
+    return float(t[-1]), float(t[-1] - t[-2]) if len(t) > 1 else 0.0
 
-    The explicit last-message signal exists because mean-pooling dilutes an outcome message to
-    1/k of the pool: without it the score failed to snap after pacs.002/camt.054 arrived. With
-    it, 'camt.054 seen' / 'pacs.002 RJCT seen' are directly readable by the head.
+
+def _prefix_features(pool, g):
+    """In-flight feature vector for a prefix (its message rows, lifecycle order):
+    mean-pooled embeddings + one-hot(last msg_type, last tx_sts) + elapsed-time signals.
+
+    The last-message one-hots exist because mean-pooling dilutes an outcome message to 1/k of
+    the pool (the score failed to snap on camt.054 without them). The time tail - log-minutes
+    since pain.001 and log-gap since the previous message - makes a slow/stale lifecycle
+    readable (a pacs.008 followed by hours of silence scores differently from a fresh one).
     """
     from data.iso_lifecycle import MSG_TYPES, TX_STS
+    last = g.iloc[-1]
     mt = np.zeros(len(MSG_TYPES), dtype=np.float32)
-    m = last_row.get("msg_type")
+    m = last.get("msg_type")
     if m in MSG_TYPES:
         mt[MSG_TYPES.index(m)] = 1.0
     st = np.zeros(len(TX_STS), dtype=np.float32)
-    s = last_row.get("tx_sts")
+    s = last.get("tx_sts")
     s = "" if (s is None or (isinstance(s, float) and np.isnan(s))) else str(s)
     if s in TX_STS:
         st[TX_STS.index(s)] = 1.0
-    return np.concatenate([pool, mt, st])
+    t_last, gap = _prefix_times(g)
+    tail = np.array([np.log1p(max(t_last, 0.0)), np.log1p(max(gap, 0.0))], dtype=np.float32)
+    return np.concatenate([pool, mt, st, tail])
 
 
-def fit_inflight_head(encoder, vocabs, msg, device, max_uetrs=4000, log=print):
-    """Fit the streaming 'will it be booked?' head on message-prefix pools.
+def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, log=print):
+    """Fit the in-flight lifecycle heads on message-prefix pools -> dict of sklearn heads.
 
-    Trains on ALL visible prefixes (k=1..n) per UETR, so the served probability is valid at
-    any lifecycle state - including snapping toward 1/0 once an outcome message (pacs.002 /
-    camt.054) is in the prefix. Pooling here is the SAME operation predict_stream applies
-    (mean of the frozen per-message embeddings seen so far) - no train/serve skew.
+    Trains on ALL visible prefixes (k=1..n) per UETR, so every head is valid at any lifecycle
+    state (and snaps once outcome messages arrive). The feature op is the SAME one
+    predict_stream applies - no train/serve skew. Heads:
+      booked         P(camt.054 eventually)            LogisticRegression (binary)
+      outcome        terminal status distribution      LogisticRegression (multiclass)
+      reason         reject/hold reason code           LogisticRegression (multiclass)
+      eta_remaining  minutes to lifecycle end          Ridge (log1p space)
+      cancel/return  recall / return likelihood        LogisticRegression, None if degenerate
 
-    ponytail: capped at max_uetrs payments (one logistic head does not need 100k prefixes and
-    full-corpus embedding is minutes of CPU); raise the cap if the head ever looks data-bound.
+    ponytail: capped at max_uetrs payments (linear heads don't need 100k prefixes and
+    full-corpus embedding is minutes of CPU); raise the cap if a head ever looks data-bound.
     """
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.linear_model import LogisticRegression, Ridge
     msg = _visible_sorted(msg)
     keep = msg["end_to_end_id"].drop_duplicates().head(max_uetrs)
     msg = msg[msg["end_to_end_id"].isin(set(keep))].reset_index(drop=True)
     e = _embed_messages(encoder, vocabs, msg, device)
     booked = msg.groupby("end_to_end_id")["msg_type"].agg(lambda s: int("camt.054" in set(s)))
-    X, y = [], []
+    lab = pay.set_index("payment_id")
+    X, y = [], {k: [] for k in ("booked", "outcome", "reason", "eta", "cancel", "return")}
     for u, g in msg.groupby("end_to_end_id", sort=False):
+        row = lab.loc[int(g["payment_id"].iloc[0])]
+        total = float(row.get("time_to_settle_min", 0.0) or 0.0)
         idx = g.index.to_numpy()
         csum = np.cumsum(e[idx], axis=0)
         for k in range(1, len(idx) + 1):
-            X.append(_prefix_features(csum[k - 1] / k, g.iloc[k - 1]))
-            y.append(int(booked[u]))
-    X, y = np.asarray(X), np.asarray(y)
-    head = LogisticRegression(max_iter=1000, class_weight="balanced").fit(X, y)
-    log(f"[inflight] booked head fit on {len(y):,} prefixes from {len(keep):,} payments "
-        f"(prevalence {y.mean():.2f})")
-    return head
+            gk = g.iloc[:k]
+            X.append(_prefix_features(csum[k - 1] / k, gk))
+            t_last, _ = _prefix_times(gk)
+            y["booked"].append(int(booked[u]))
+            y["outcome"].append(str(row.get("terminal_status", "STP")))
+            y["reason"].append(str(row.get("reject_reason", "none")))
+            y["eta"].append(np.log1p(max(total - t_last, 0.0)))
+            y["cancel"].append(int(row.get("cancel_requested", 0)))
+            y["return"].append(int(row.get("returned", 0)))
+    X = np.asarray(X)
+
+    def _clf(target):
+        arr = np.asarray(y[target])
+        if len(set(arr.tolist())) < 2:          # degenerate at this scale -> no head
+            return None
+        return LogisticRegression(max_iter=1000, class_weight="balanced").fit(X, arr)
+
+    heads = {"booked": _clf("booked"), "outcome": _clf("outcome"), "reason": _clf("reason"),
+             "eta_remaining": Ridge().fit(X, np.asarray(y["eta"])),
+             "cancel": _clf("cancel"), "return": _clf("return")}
+    log(f"[inflight] lifecycle heads fit on {len(X):,} prefixes from {len(keep):,} payments "
+        f"(booked prevalence {np.mean(y['booked']):.2f}; "
+        f"degenerate: {[k for k, h in heads.items() if h is None]})")
+    return heads
 
 
 # --------------------------------------------------------------------------- #
@@ -136,7 +173,7 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
         "statuses": list(probes["status"].classes_),
         "exceptions": list(probes["exc"].keys()),
         "tasks": list(probes.get("tasks", {})),
-        "inflight": "inflight_booked" in probes,
+        "inflight": "inflight" in probes,
         "hidden": enc_cfg.hidden,
     }, indent=2))
     return save_dir
@@ -223,18 +260,19 @@ class IndiaScorer:
         return out.reset_index(drop=True)
 
     def predict_stream(self, msg_df):
-        """Score message prefixes per UETR: P(booked | messages seen so far).
+        """Score message prefixes per UETR -> the predicted-lifecycle object.
 
         Input: engine-visible message rows (build_messages output / the stream CSV) - any
-        subset of a payment's lifecycle counts as 'seen so far'. Returns one row per UETR:
-        n_msgs, last_msg_type, booked_proba. Requires a bundle with the 'inflight_booked'
-        head (run_india --save on this revision or later).
+        subset of a payment's lifecycle counts as 'seen so far'. Per UETR: booked_proba,
+        settlement_outcome distribution, eta_remaining_min, reject_reason_if_failed, and
+        recall/return likelihoods (None where the head was degenerate at training scale).
+        Requires a bundle with probes['inflight'] (run_india --save on this revision+).
         """
         import pandas as pd
-        head = self.probes.get("inflight_booked")
-        if head is None:
-            raise SystemExit("this bundle has no in-flight head - retrain with "
-                             "`run_india.py --save` to add probes['inflight_booked']")
+        heads = self.probes.get("inflight")
+        if not heads:
+            raise SystemExit("this bundle has no in-flight lifecycle heads - retrain with "
+                             "`run_india.py --save` to add probes['inflight']")
         msg = _visible_sorted(msg_df)
         if not len(msg):
             return pd.DataFrame(columns=["end_to_end_id", "n_msgs", "last_msg_type",
@@ -243,13 +281,33 @@ class IndiaScorer:
         rows = []
         for u, g in msg.groupby("end_to_end_id", sort=False):
             idx = g.index.to_numpy()
-            x = _prefix_features(e[idx].mean(0), g.iloc[-1])  # same op fit_inflight_head used
-            if head.n_features_in_ != x.shape[0]:
-                raise SystemExit("in-flight head predates the current feature format - "
+            x = _prefix_features(e[idx].mean(0), g)[None]   # same op fit_inflight_heads used
+            if heads["booked"].n_features_in_ != x.shape[1]:
+                raise SystemExit("in-flight heads predate the current feature format - "
                                  "refit with `run_india.py --save`")
-            rows.append({"end_to_end_id": u, "n_msgs": int(len(idx)),
-                         "last_msg_type": g["msg_type"].iloc[-1],
-                         "booked_proba": round(float(head.predict_proba(x[None])[0, 1]), 4)})
+            out = {"end_to_end_id": u, "n_msgs": int(len(idx)),
+                   "last_msg_type": g["msg_type"].iloc[-1],
+                   "booked_proba": round(float(heads["booked"].predict_proba(x)[0, 1]), 4)}
+            oc = heads.get("outcome")
+            out["settlement_outcome"] = ({c: round(float(p), 4) for c, p in
+                                          zip(oc.classes_, oc.predict_proba(x)[0])}
+                                         if oc is not None else None)
+            out["eta_remaining_min"] = round(float(np.clip(
+                np.expm1(heads["eta_remaining"].predict(x)[0]), 0, None)), 1)
+            rs = heads.get("reason")
+            if rs is not None:                              # top NON-'none' reason code
+                p = rs.predict_proba(x)[0]
+                cand = [(c, float(v)) for c, v in zip(rs.classes_, p) if c != "none"]
+                code, score = max(cand, key=lambda t: t[1]) if cand else (None, 0.0)
+                out["reject_reason_if_failed"] = ({"code": code, "score": round(score, 4)}
+                                                  if code else None)
+            else:
+                out["reject_reason_if_failed"] = None
+            for name, key in (("cancel_proba", "cancel"), ("return_proba", "return")):
+                h = heads.get(key)
+                out[name] = (round(float(h.predict_proba(x)[0, 1]), 4)
+                             if h is not None else None)
+            rows.append(out)
         return pd.DataFrame(rows)
 
 

@@ -25,9 +25,9 @@ def test_save_load_predict_roundtrip(tmp_path):
 
     probes = train_probes(e, pay, schema, np.arange(len(pay)))
     from data.synth_india_rails import build_messages
-    from serve_india import fit_inflight_head
+    from serve_india import fit_inflight_heads
     msg = build_messages(pay, evt)
-    probes["inflight_booked"] = fit_inflight_head(enc, vocabs, msg, "cpu", max_uetrs=300)
+    probes["inflight"] = fit_inflight_heads(enc, vocabs, msg, pay, "cpu", max_uetrs=300)
     quant = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                     pay[vocabs.ccy_col].to_numpy())
     save_india_model(tmp_path / "m", enc_cfg=cfg, vocabs=vocabs, quantizer=quant,
@@ -70,11 +70,16 @@ def test_save_load_predict_roundtrip(tmp_path):
     assert list(res["status_pred"]) == list(ref["status_pred"])
     assert list(res["risk_pred"]) == list(ref["risk_pred"])
 
-    # in-flight streaming: the persisted head scores message prefixes per UETR.
+    # in-flight streaming: the persisted heads emit the predicted-lifecycle object per UETR.
     some = msg[msg["payment_id"].isin(set(pay["payment_id"].head(30)))]
     st = scorer.predict_stream(some)
-    assert {"end_to_end_id", "n_msgs", "last_msg_type", "booked_proba"} <= set(st.columns)
+    assert {"end_to_end_id", "n_msgs", "last_msg_type", "booked_proba",
+            "settlement_outcome", "eta_remaining_min", "reject_reason_if_failed",
+            "cancel_proba", "return_proba"} <= set(st.columns)
     assert len(st) and st["booked_proba"].between(0, 1).all()
+    assert (st["eta_remaining_min"] >= 0).all()
+    dist = st["settlement_outcome"].iloc[0]                  # a proper distribution
+    assert dist is not None and abs(sum(dist.values()) - 1.0) < 1e-6
     # a prefix WITHOUT outcome messages must also score (the real-time case)
     pre = some[~some["msg_type"].isin(["pacs.002", "camt.054", "pacs.004"])]
     st_pre = scorer.predict_stream(pre)
@@ -83,8 +88,13 @@ def test_save_load_predict_roundtrip(tmp_path):
     # the last-message one-hot makes the outcome directly readable, not diluted by the pool.
     snapped = st[st["last_msg_type"] == "camt.054"]
     assert len(snapped) and (snapped["booked_proba"] > 0.5).all()
-    # an old-style bundle (no in-flight head) fails loudly, not silently
+    # an old-style bundle (no in-flight heads) fails loudly, not silently
     import pytest
-    bare = {k: v for k, v in probes.items() if k != "inflight_booked"}
+    bare = {k: v for k, v in probes.items() if k != "inflight"}
     with pytest.raises(SystemExit):
         IndiaScorer(enc, vocabs, bare, "cpu").predict_stream(some)
+    # feature-vector contract: pool + msg_type one-hot + tx_sts one-hot + 2 time features
+    from data.iso_lifecycle import MSG_TYPES, TX_STS
+    from serve_india import _prefix_features
+    x = _prefix_features(np.zeros(cfg.hidden), msg.head(2))
+    assert x.shape[0] == cfg.hidden + len(MSG_TYPES) + len(TX_STS) + 2

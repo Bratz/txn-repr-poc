@@ -15,7 +15,7 @@ from encoder.tabular_encoder import pretrain as enc_pretrain
 from encoders.quantizer import AdaptiveQuantizer
 from run_india import train_probes
 from run_seq import embed_all_rows
-from serve_india import fit_inflight_head, save_india_model
+from serve_india import fit_inflight_heads, save_india_model
 
 
 def test_api_endpoints_roundtrip(tmp_path, monkeypatch):
@@ -29,7 +29,7 @@ def test_api_endpoints_roundtrip(tmp_path, monkeypatch):
     e = embed_all_rows(enc, vocabs.encode(pay), len(pay), "cpu").cpu().numpy()
     probes = train_probes(e, pay, schema, np.arange(len(pay)))
     msg = build_messages(pay, evt)
-    probes["inflight_booked"] = fit_inflight_head(enc, vocabs, msg, "cpu", max_uetrs=200)
+    probes["inflight"] = fit_inflight_heads(enc, vocabs, msg, pay, "cpu", max_uetrs=200)
     quant = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                     pay[vocabs.ccy_col].to_numpy())
     save_india_model(tmp_path / "m", enc_cfg=cfg, vocabs=vocabs, quantizer=quant,
@@ -53,7 +53,10 @@ def test_api_endpoints_roundtrip(tmp_path, monkeypatch):
         m = c.post("/score/inflight",
                    json={"messages": json.loads(some.to_json(orient="records"))})
         assert m.status_code == 200
-        assert all(0.0 <= x["booked_proba"] <= 1.0 for x in m.json()["results"])
+        for x in m.json()["results"]:
+            assert 0.0 <= x["booked_proba"] <= 1.0
+            assert x["eta_remaining_min"] >= 0
+            assert x["settlement_outcome"] is None or isinstance(x["settlement_outcome"], dict)
 
         assert c.post("/score/intake", json={}).status_code == 422    # neither rows nor XML
         bad = c.post("/score/inflight", json={"messages": [{"foo": 1}]})

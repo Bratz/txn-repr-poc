@@ -369,14 +369,14 @@ def main():
     if args.save:
         from data.synth_india_rails import build_messages
         from encoders.quantizer import AdaptiveQuantizer
-        from serve_india import fit_inflight_head, save_india_model
+        from serve_india import fit_inflight_heads, save_india_model
         quantizer = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                              pay[vocabs.ccy_col].to_numpy())
         probes = train_probes(e_pay, pay, schema, tr)        # deployable probes (train split)
-        # in-flight streaming head: fit on TRAIN-split payments' message prefixes only.
+        # in-flight lifecycle heads: fit on TRAIN-split payments' message prefixes only.
         msg = build_messages(pay, evt)
-        probes["inflight_booked"] = fit_inflight_head(
-            encoder, vocabs, msg[msg["payment_id"].isin(tr_ids)], device)
+        probes["inflight"] = fit_inflight_heads(
+            encoder, vocabs, msg[msg["payment_id"].isin(tr_ids)], pay, device)
         path = save_india_model(args.save, enc_cfg=enc_cfg, vocabs=vocabs, quantizer=quantizer,
                                 encoder=encoder, schema=schema, probes=probes)
         print(f"[save] model -> {path}")
