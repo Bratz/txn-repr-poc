@@ -32,7 +32,7 @@ import torch
 
 from data.iso_lifecycle import MSG_TYPES
 from run_gpu import _to_device
-from run_seq import embed_all_rows, encode_histories, frozen_embeddings
+from run_seq import embed_all_rows, encode_histories, frozen_embeddings, pooled_features
 
 ROOT = Path(__file__).resolve().parent
 
@@ -74,17 +74,6 @@ def tracker_labels(msg, seqs):
         if code is not None:
             kept.append(s); y.append(code)
     return kept, np.asarray(y, dtype=np.int64)
-
-
-def _split(seqs, y, frac_eval=0.2, seed=0):
-    rng = np.random.default_rng(seed)
-    perm = rng.permutation(len(seqs)); cut = int(len(seqs) * (1 - frac_eval))
-    tr, ev = perm[:cut], perm[cut:]
-    return ([seqs[i] for i in tr], y[tr]), ([seqs[i] for i in ev], y[ev])
-
-
-def _pooled(e_all, seqs):
-    return np.stack([e_all[s["pos"]].mean(0).cpu().numpy() for s in seqs])
 
 
 def _probe(Xtr, ytr, Xev, yev):
@@ -133,7 +122,11 @@ def main():
           f"  class balance {np.bincount(y, minlength=3).tolist()} = {TRACKER_NAMES}")
     if len(seqs) < 50 or len(set(y.tolist())) < 2:
         raise SystemExit("not enough labelled sequences; raise --limit")
-    (tr_seqs, y_tr), (ev_seqs, y_ev) = _split(seqs, y)
+    from data.sequence_assembly import split_by_actor
+    ylab = {s["actor"]: int(c) for s, c in zip(seqs, y)}      # one UETR = one unique actor
+    tr_seqs, ev_seqs = split_by_actor(seqs, frac_eval=0.2, seed=0)
+    y_tr = np.array([ylab[s["actor"]] for s in tr_seqs])
+    y_ev = np.array([ylab[s["actor"]] for s in ev_seqs])
 
     # history-encoder reconstruction targets: Ccy + msg_type (discrete, per message row)
     recon_fields = {"Ccy": vocabs.core_size("Ccy"), "msg_type": len(MSG_TYPES)}
@@ -154,7 +147,8 @@ def main():
     h_tr = encode_histories(hist, e_msg, tr_seqs, device).cpu().numpy()
     h_ev = encode_histories(hist, e_msg, ev_seqs, device).cpu().numpy()
     seq_acc, seq_f1 = _probe(h_tr, y_tr, h_ev, y_ev)
-    pool_acc, pool_f1 = _probe(_pooled(e_msg, tr_seqs), y_tr, _pooled(e_msg, ev_seqs), y_ev)
+    pool_acc, pool_f1 = _probe(pooled_features(e_msg, tr_seqs), y_tr,
+                               pooled_features(e_msg, ev_seqs), y_ev)
 
     res = {"mode": "smoke" if args.smoke else "full", "n_sequences": len(seqs),
            "held_out": int(len(y_ev)), "class_names": TRACKER_NAMES,

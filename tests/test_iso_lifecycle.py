@@ -1,7 +1,7 @@
 """Tests for the ISO 20022 message lifecycle (data/iso_lifecycle.py)."""
 
 from data.iso_lifecycle import (
-    ENCODER_COLS, MSG_TYPES, UNKNOWN, lifecycle_messages, missing_mask, stage_names,
+    ENCODER_COLS, ENRICH_ADDS, MSG_TYPES, UNKNOWN, lifecycle_messages, missing_mask,
 )
 
 RECON = ["DbtrAcct_Id", "CdtrAcct_Id", "IntrBkSttlmAmt", "Ccy",
@@ -27,7 +27,7 @@ def test_pain001_hides_clearing_fields_pacs008_complete():
     assert _missing(0) == {"IntrBkSttlmDt", "UltmtCdtr_Id"}
     assert not any(missing_mask(RECON, 1))
     assert _missing(1) <= _missing(0)                       # nested
-    assert stage_names() == ["pain.001", "pacs.008"]
+    assert [n for n, _ in ENRICH_ADDS] == ["pain.001", "pacs.008"]
 
 
 def test_happy_path_emits_full_five_message_chain():
@@ -52,6 +52,22 @@ def test_manual_review_maps_to_gpi_tracker_acsp_g002_never_booked():
     mr = _chain("MANUAL_REVIEW", [("aml", "none"), ("npci_switch", "technical_decline")])
     assert [m for m, _, _ in mr][-1] == "pacs.002"
     assert mr[-1][1:] == ("ACSP", "G002")                  # gpi tracker: in repair, not booked
+
+
+def test_timestamps_start_zero_end_total_monotonic():
+    row = dict(_row(), time_to_settle_min=10.0)
+    offs = [m["t_offset_min"] for m in lifecycle_messages(row, "STP", [("credit", "none")])]
+    assert offs[0] == 0.0 and offs[-1] == 10.0
+    assert all(b >= a for a, b in zip(offs, offs[1:]))
+
+
+def test_cover_method_emits_pacs009_after_pacs008():
+    cov = dict(_row(), SttlmMtd="COVE")
+    types = [m["msg_type"] for m in lifecycle_messages(cov, "STP", [("credit", "none")])]
+    assert types[:4] == ["pain.001", "pain.002", "pacs.008", "pacs.009"]
+    clrg = dict(_row(), SttlmMtd="CLRG")
+    assert "pacs.009" not in [m["msg_type"]
+                              for m in lifecycle_messages(clrg, "STP", [("credit", "none")])]
 
 
 def test_account_closed_bounces_to_return_with_reversed_parties():

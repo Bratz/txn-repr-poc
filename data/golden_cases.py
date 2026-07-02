@@ -118,7 +118,6 @@ def build_golden():
         row["case"] = name
         row["payment_id"] = i
         row["rail"] = rail
-        row["rail_family"] = rail
         row["identifier_type"] = ident
         row["settlement_kind"] = RAILS[rail].settlement
         row["direction"] = "outward" if src.country == "IN" else "inward"

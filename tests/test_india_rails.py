@@ -4,7 +4,7 @@ import numpy as np
 
 from data.rails import (
     RAILS, RAIL_NAMES, below_min, choose_rail, eligible_rails, sample_identifier,
-    settle_seconds, violates_cap,
+    violates_cap,
 )
 from data.synth_india_rails import (
     EXCEPTION_CODES, IndiaConfig, WORKFLOW, build_dataset, build_schema,
@@ -69,14 +69,6 @@ def test_cap_and_min_helpers():
     assert violates_cap("IMPS", 600_000) and not violates_cap("NEFT", 10_000_000)
     assert below_min("RTGS", 100_000) and not below_min("RTGS", 200_000)
     assert not below_min("UPI", 1)
-
-
-def test_settle_seconds_neft_slowest():
-    rng = np.random.default_rng(3)
-    upi = np.mean([settle_seconds("UPI", rng) for _ in range(300)])
-    neft = np.mean([settle_seconds("NEFT", rng) for _ in range(300)])
-    assert neft > upi                                                 # batch wait dominates
-    assert RAILS["UPI"].sla_lo <= upi <= RAILS["UPI"].sla_hi + 1
 
 
 # --------------------------------------------------------------------------- #

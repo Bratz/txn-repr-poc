@@ -356,7 +356,6 @@ def build_dataset(cfg: IndiaConfig):
                                  assign_expense(dest), "No", pid)
         row["payment_id"] = pid
         row["rail"] = rail
-        row["rail_family"] = rail                       # 1:1 in India; kept for parity
         row["identifier_type"] = identifier
         row["settlement_kind"] = RAILS[rail].settlement
         # --- amount split: model the two-currency nature of cross-border + charges (Track D P1)

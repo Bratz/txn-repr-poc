@@ -211,9 +211,6 @@ class PartyStore:
             return np.zeros(self.dim, dtype=np.float32)
         return self.vectors[i]
 
-    def lookup_batch(self, keys) -> np.ndarray:
-        return np.stack([self.lookup(k) for k in keys], axis=0)
-
     @classmethod
     def from_arrays(cls, keys, vectors: np.ndarray) -> "PartyStore":
         vectors = np.asarray(vectors, dtype=np.float32)

@@ -162,15 +162,6 @@ def sample_identifier(rail: str, rng: np.random.Generator) -> str:
     return "ACCT_IFSC"
 
 
-def settle_seconds(rail: str, rng: np.random.Generator) -> float:
-    """Nominal end-to-end settle time in seconds, incl. NEFT wait-to-next-batch."""
-    r = RAILS[rail]
-    base = float(rng.uniform(r.sla_lo, r.sla_hi))
-    if r.batch_minutes:
-        base += float(rng.uniform(0, r.batch_minutes)) * 60.0   # queued to next batch
-    return base
-
-
 def violates_cap(rail: str, amount: float) -> bool:
     r = RAILS[rail]
     return r.cap is not None and amount > r.cap

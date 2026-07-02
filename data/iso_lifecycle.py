@@ -27,8 +27,6 @@ ISO ExternalStatusReason values; refine against a real reason-code table if need
 
 from __future__ import annotations
 
-import math
-
 from data.synth_pacs008 import COLUMN_BUCKETS
 
 UNKNOWN = "Unknown"
@@ -108,10 +106,6 @@ REASON = {
     "technical_decline": "ED05", "settlement_fail": "ED05", "batch_return": "ED05",
     "account_closed": "AC04", "fx_fail": "AM09", "no_route": "ED01", "no_cover": "ED05",
 }
-
-
-def stage_names():
-    return [n for n, _ in ENRICH_ADDS]
 
 
 def available_at(stage_idx: int) -> set:
@@ -220,79 +214,3 @@ def _stamp_offsets(out, total):
     for i, row in enumerate(out):
         row["t_offset_min"] = round(total * i / (n - 1), 3) if n > 1 else 0.0
     return out
-
-
-if __name__ == "__main__":
-    # self-check: the emission rules, field ownership and nested masks hold.
-    recon = ["DbtrAcct_Id", "CdtrAcct_Id", "IntrBkSttlmAmt", "Ccy",
-             "IntrBkSttlmDt", "UltmtDbtr_Id", "UltmtCdtr_Id", "identifier_type"]
-
-    def _missing(i):
-        return {recon[j] for j, m in enumerate(missing_mask(recon, i)) if m}
-
-    # pain.001 hides exactly the two clearing-resolved fields; pacs.008 hides nothing.
-    assert _missing(0) == {"IntrBkSttlmDt", "UltmtCdtr_Id"}, _missing(0)
-    assert not any(missing_mask(recon, 1))
-    assert _missing(1) <= _missing(0)                              # nested
-    assert stage_names() == ["pain.001", "pacs.008"]
-
-    base = {c: f"v_{c}" for c in ENCODER_COLS}
-    base.update(payment_id=7, IntrBkSttlmAmt=100.0, rail="IMPS", direction="outward",
-                time_to_settle_min=10.0)
-
-    def chain(status, events):
-        return [(m["msg_type"], m["tx_sts"], m["sts_reason"])
-                for m in lifecycle_messages(base, status, events)]
-
-    # happy path -> pain.001..camt.054 chain ending in a camt.054 BOOK.
-    stp = chain("STP", [("validation", "none"), ("credit", "none")])
-    assert [m for m, _, _ in stp] == MSG_TYPES[:5], stp
-    assert stp[-1] == ("camt.054", "BOOK", "")
-    # pre-submission reject (limit_check) -> stops at pain.002 RJCT, no pacs.008.
-    pre = chain("REJECTED", [("validation", "none"), ("limit_check", "limit_exceeded")])
-    assert [m for m, _, _ in pre] == ["pain.001", "pain.002"]
-    assert pre[-1] == ("pain.002", "RJCT", "AM02"), pre
-    # clearing reject (settlement) -> pacs.008 sent, then pacs.002 RJCT, no camt.054.
-    clr = chain("REJECTED", [("validation", "none"), ("settlement", "settlement_fail")])
-    assert [m for m, _, _ in clr] == ["pain.001", "pain.002", "pacs.008", "pacs.002"]
-    assert clr[-1] == ("pacs.002", "RJCT", "ED05"), clr
-    # manual review -> settlement pending, never booked.
-    mr = chain("MANUAL_REVIEW", [("aml", "none"), ("npci_switch", "technical_decline")])
-    assert mr[-1] == ("pacs.002", "ACSP", "G002")          # gpi tracker: in repair
-
-    # pain.001 blanks the four not-yet-available columns; pacs.008 keeps all.
-    p1 = _project_message(base, "pain.001")
-    assert p1["UltmtCdtr_Id"] == UNKNOWN and p1["IntrBkSttlmDt"] == UNKNOWN
-    assert p1["DbtrAcct_Id"] == "v_DbtrAcct_Id"
-    assert math.isnan(_project_message(base, "pain.002")["IntrBkSttlmAmt"]) is False
-    assert _project_message(base, "pacs.008")["UltmtCdtr_Id"] == "v_UltmtCdtr_Id"
-
-    # timestamps: pain.001 @ 0, last message @ total, monotonic non-decreasing.
-    msgs = lifecycle_messages(base, "STP", [("credit", "none")])
-    offs = [m["t_offset_min"] for m in msgs]
-    assert offs[0] == 0.0 and offs[-1] == 10.0
-    assert all(b >= a for a, b in zip(offs, offs[1:]))
-
-    # return leg: account_closed bounce -> pacs.002 ACSC then a pacs.004 with REVERSED parties.
-    ar = lifecycle_messages(base, "REJECTED", [("credit", "account_closed")])
-    types = [m["msg_type"] for m in ar]
-    assert types[-2:] == ["pacs.002", "pacs.004"] and ar[-2]["tx_sts"] == "ACSC"
-    ret = ar[-1]
-    assert ret["DbtrAcct_Id"] == base["CdtrAcct_Id"] and ret["CdtrAcct_Id"] == base["DbtrAcct_Id"]
-
-    # cancellation overlay: accepted recall of a credited payment -> camt.056, camt.029(CNCL), pacs.004.
-    crow = dict(base, cancel_requested=1, cancel_status="CNCL", return_reason="CUST")
-    cm = [(m["msg_type"], m["tx_sts"]) for m in lifecycle_messages(crow, "STP", [("credit", "none")])]
-    assert ("camt.056", "") in cm and ("camt.029", "CNCL") in cm and cm[-1] == ("pacs.004", "")
-    # rejected recall -> camt.029(RJCR), no return.
-    rrow = dict(base, cancel_requested=1, cancel_status="RJCR")
-    rm = [m["msg_type"] for m in lifecycle_messages(rrow, "STP", [("credit", "none")])]
-    assert "camt.029" in rm and "pacs.004" not in rm
-
-    # cover method (COVE) emits a pacs.009 alongside the pacs.008; non-cover does not.
-    cov = dict(base, SttlmMtd="COVE")
-    cseq = [m["msg_type"] for m in lifecycle_messages(cov, "STP", [("credit", "none")])]
-    assert cseq[:4] == ["pain.001", "pain.002", "pacs.008", "pacs.009"]
-    assert "pacs.009" not in [m["msg_type"] for m in
-                              lifecycle_messages(dict(base, SttlmMtd="CLRG"), "STP", [("credit", "none")])]
-    print("iso_lifecycle self-check OK")

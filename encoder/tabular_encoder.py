@@ -263,9 +263,6 @@ class TabularEncoder(nn.Module):
     def num_trainable_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def num_parameters(self) -> int:
-        return sum(p.numel() for p in self.parameters())
-
     def backbone_parameters(self) -> int:
         """Transformer-only param count (the figure the paper's '25M' refers to)."""
         return sum(p.numel() for p in self.transformer.parameters())
