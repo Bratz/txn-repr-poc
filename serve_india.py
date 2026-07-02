@@ -35,6 +35,53 @@ from run_seq import embed_all_rows
 
 _ENC = "encoder.pt"
 _PROBES = "probes.joblib"
+_HIST = "hist.pt"
+
+
+# --------------------------------------------------------------------------- #
+# Velocity (per-account burst) - the v2 time-aware history encoder, served
+# --------------------------------------------------------------------------- #
+
+def fit_velocity(encoder, vocabs, pay, device, hist_epochs=2, burst_k=2,
+                 burst_min_events=4, log=print):
+    """Pretrain a small history encoder over per-account payment sequences (frozen per-row
+    embeddings + inter-arrival/calendar encoding) and fit the burst head on h_USR.
+
+    Returns (hcfg_dict, recon_fields, state_dict, head) for persistence; head is None if the
+    burst label is degenerate at this scale. Serving is STATELESS: the engine sends an
+    account's recent payment rows to predict_velocity - no store in the scorer.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from dataclasses import asdict
+    from data.sequence_assembly import assemble_sequences, velocity_labels
+    from encoder.history_encoder import HistoryConfig, HistoryEncoder
+    from encoder.history_encoder import pretrain as hist_pretrain
+    from run_seq import encode_histories
+
+    e_all = torch.as_tensor(_embed_messages(encoder, vocabs, pay, device)).to(device)
+    D = int(e_all.shape[1])
+    seqs = assemble_sequences(pay, actor_col="DbtrAcct_Id", max_len=64, min_len=2)
+    if not seqs:
+        log("[velocity] no multi-payment accounts - head skipped")
+        return None
+    recon_fields = {"Ccy": vocabs.core_size("Ccy"),
+                    "identifier_type": vocabs.core_size("identifier_type")}
+    full = vocabs.encode(pay)
+    targets_all = {n: full["core"][n] for n in recon_fields}
+    hcfg = HistoryConfig(hidden=D, layers=2, heads=4, ff_mult=2, epochs=hist_epochs)
+    hist = HistoryEncoder(recon_fields, hcfg).to(device)
+    hist_pretrain(hist, e_all, targets_all, seqs, hcfg, batch_size=64, log=log)
+    hist.freeze()
+    h = encode_histories(hist, e_all, seqs, device).cpu().numpy()
+    # ponytail: burst window relaxed vs run_seq's defaults (k=3/min 6) - India accounts
+    # average ~5 payments, so the stricter window is all-zeros here. Still timing-only.
+    yv = velocity_labels(seqs, k=burst_k, min_events=burst_min_events)
+    head = (LogisticRegression(max_iter=1000, class_weight="balanced").fit(h, yv)
+            if len(set(yv.tolist())) > 1 else None)
+    log(f"[velocity] hist encoder + head fit on {len(seqs):,} account sequences "
+        f"(burst prevalence {yv.mean():.3f}{'' if head else '; head degenerate -> None'})")
+    return {"hcfg": asdict(hcfg), "recon_fields": recon_fields,
+            "state": hist.state_dict(), "head": head}
 
 
 # --------------------------------------------------------------------------- #
@@ -148,11 +195,16 @@ def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, log=pr
 # Save
 # --------------------------------------------------------------------------- #
 
-def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, probes):
-    """Persist the frozen encoder bundle + intake probes."""
+def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, probes,
+                     velocity=None):
+    """Persist the frozen encoder bundle + intake probes (+ the velocity hist encoder)."""
     import joblib
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    if velocity is not None:
+        torch.save({k: velocity[k] for k in ("hcfg", "recon_fields", "state")},
+                   save_dir / _HIST)
+        probes = {**probes, "velocity": velocity["head"]}
     torch.save({
         "enc_cfg": asdict(enc_cfg),
         "schema_buckets": schema["buckets"],
@@ -174,6 +226,7 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
         "exceptions": list(probes["exc"].keys()),
         "tasks": list(probes.get("tasks", {})),
         "inflight": "inflight" in probes,
+        "velocity": velocity is not None and velocity["head"] is not None,
         "hidden": enc_cfg.hidden,
     }, indent=2))
     return save_dir
@@ -194,11 +247,13 @@ class IndiaScorer:
                             (fit_inflight_head) - the only valid consumer of pooled prefixes.
     """
 
-    def __init__(self, encoder, vocabs, probes, device):
+    def __init__(self, encoder, vocabs, probes, device, hist=None, velocity_head=None):
         self.encoder = encoder
         self.vocabs = vocabs
         self.probes = probes
         self.device = device
+        self.hist = hist                      # frozen v2 history encoder (velocity), optional
+        self.velocity_head = velocity_head
 
     @torch.no_grad()
     def _embed(self, df):
@@ -310,6 +365,73 @@ class IndiaScorer:
             rows.append(out)
         return pd.DataFrame(rows)
 
+    def predict_velocity(self, txns_df):
+        """Per-account burst score from the account's recent payment rows (>=2, any order -
+        sequenced by IntrBkSttlmDt). STATELESS: the engine owns the history store and sends
+        the window. Returns actor, n_txns, burst_proba (time-aware v2 encoder) and burst_rule
+        (the transparent last-k-gaps rule) for comparison.
+        """
+        import pandas as pd
+        from data.sequence_assembly import assemble_sequences, velocity_labels
+        from run_seq import encode_histories
+        if self.hist is None or self.velocity_head is None:
+            raise SystemExit("this bundle has no velocity head - refit with fit_velocity "
+                             "(run_india.py --save on this revision or later)")
+        df = txns_df.reset_index(drop=True)
+        e_all = torch.as_tensor(self._embed(df)).to(self.device)
+        seqs = assemble_sequences(df, actor_col="DbtrAcct_Id", max_len=64, min_len=2)
+        if not seqs:
+            return pd.DataFrame(columns=["actor", "n_txns", "burst_proba", "burst_rule"])
+        h = encode_histories(self.hist, e_all, seqs, self.device).cpu().numpy()
+        proba = self.velocity_head.predict_proba(h)[:, 1]
+        rule = velocity_labels(seqs, k=2, min_events=4)      # same window the head was fit on
+        return pd.DataFrame({"actor": [s["actor"] for s in seqs],
+                             "n_txns": [len(s["pos"]) for s in seqs],
+                             "burst_proba": np.round(proba, 4),
+                             "burst_rule": rule.astype(int)})
+
+    def explain(self, df, top_k=5):
+        """Column-occlusion drivers per payment (FAITHFUL attribution, no LLM): occlude one
+        feature column at a time (categoricals -> 'Unknown', amount -> 0.0), re-embed, and
+        report the drop in the predicted rail/risk probability and the ETA shift. ~n_cols
+        extra forward passes per payment - cap the batch accordingly.
+        """
+        import pandas as pd
+        df = df.reset_index(drop=True)
+        cols = (list(self.vocabs.high_card) + [self.vocabs.numerical_col]
+                + list(self.vocabs.core))
+        meta = [c for c in ("Dbtr_Nm", "Cdtr_Nm", "UltmtDbtr_Nm", "UltmtCdtr_Nm",
+                            "Dbtr_Ctry", "Cdtr_Ctry", "Dbtr_Industry", "Cdtr_Industry",
+                            "Dbtr_SubIndustry", "Cdtr_SubIndustry") if c in df.columns]
+        cols = [c for c in cols if c in df.columns] + meta
+        frames = [df] + [df.assign(**{c: 0.0 if c == self.vocabs.numerical_col else "Unknown"})
+                         for c in cols]
+        big = pd.concat(frames, ignore_index=True)
+        e = self._embed(big)
+        n = len(df)
+        base, occ = e[:n], e[n:].reshape(len(cols), n, -1)
+        rail, risk = self.probes["rail"], self.probes.get("tasks", {}).get("risk")
+        p_rail = rail.predict_proba(base)
+        cls = p_rail.argmax(1)
+        p_risk = risk.predict_proba(base) if risk is not None else None
+        rcls = p_risk.argmax(1) if p_risk is not None else None
+        eta = self.probes["eta"].predict(base)
+        out = []
+        for i in range(n):
+            drivers = []
+            for j, c in enumerate(cols):
+                d_rail = float(p_rail[i, cls[i]] - rail.predict_proba(occ[j, i:i+1])[0, cls[i]])
+                d_risk = (float(p_risk[i, rcls[i]]
+                                - risk.predict_proba(occ[j, i:i+1])[0, rcls[i]])
+                          if risk is not None else 0.0)
+                d_eta = float(eta[i] - self.probes["eta"].predict(occ[j, i:i+1])[0])
+                drivers.append({"field": c, "rail_impact": round(d_rail, 4),
+                                "risk_impact": round(d_risk, 4),
+                                "eta_impact_min": round(d_eta, 1)})
+            drivers.sort(key=lambda d: -(abs(d["rail_impact"]) + abs(d["risk_impact"])))
+            out.append(drivers[:top_k])
+        return out
+
 
 def load_india_model(save_dir, device=None) -> IndiaScorer:
     import joblib
@@ -334,7 +456,16 @@ def load_india_model(save_dir, device=None) -> IndiaScorer:
     encoder.freeze()
     encoder.to(device)
     probes = joblib.load(Path(save_dir) / _PROBES)
-    return IndiaScorer(encoder, vocabs, probes, device)
+    hist = None
+    if (save_dir / _HIST).exists():
+        from encoder.history_encoder import HistoryConfig, HistoryEncoder
+        hb = torch.load(save_dir / _HIST, map_location="cpu", weights_only=False)
+        hist = HistoryEncoder(hb["recon_fields"], HistoryConfig(**hb["hcfg"]))
+        hist.load_state_dict(hb["state"])
+        hist.freeze()
+        hist.to(device)
+    return IndiaScorer(encoder, vocabs, probes, device,
+                       hist=hist, velocity_head=probes.get("velocity"))
 
 
 # --------------------------------------------------------------------------- #

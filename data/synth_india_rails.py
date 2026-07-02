@@ -142,6 +142,11 @@ class IndiaConfig:
     # base share of in-flight payments the originator recalls (camt.056). Feature-modulated:
     # higher for very large or fraud-flagged payments (so cancel-likelihood is learnable).
     cancel_frac: float = 0.03
+    # TEMPORAL CORRELATION hook: >0 makes an account's exception probability rise after its
+    # previous payment hit an exception (heat x(1+m), decaying toward 1 when clean). Gives
+    # account HISTORY predictive power over the next payment's outcome - the data change the
+    # sequence-encoder eval needs. DEFAULT 0.0 = off: published artifacts stay byte-identical.
+    exception_momentum: float = 0.0
     inward_fraction: float = 0.45
     # domestic rails enabled for this run. UPI is off by default for now (reversible - the
     # registry still defines it); set to include "UPI" to bring the fourth rail back.
@@ -222,8 +227,9 @@ def _service(step, rng):
     return float(rng.uniform(lo, hi))
 
 
-def simulate_payment(rail, src, dest, amount, rng):
-    """Traverse the rail workflow; return (events, exception_set, status, seconds)."""
+def simulate_payment(rail, src, dest, amount, rng, heat=1.0):
+    """Traverse the rail workflow; return (events, exception_set, status, seconds).
+    heat scales the random exception probabilities (account momentum; 1.0 = neutral)."""
     f = _factors(src, dest, amount)
     t = 0.0
     events, exceptions = [], set()
@@ -273,8 +279,8 @@ def simulate_payment(rail, src, dest, amount, rng):
             repaired = True                            # delayed but settled
             continue
 
-        # random feature-driven exception for this step
-        if rng.random() < _exception_prob(step, f, rng):
+        # random feature-driven exception for this step (scaled by account heat)
+        if rng.random() < min(0.95, _exception_prob(step, f, rng) * heat):
             exc = STEP_EXCEPTION[step]
             exceptions.add(exc)
             events.append((step, exc, round(t, 1)))
@@ -325,6 +331,7 @@ def build_dataset(cfg: IndiaConfig):
     n_in, n_fgn = len(in_accs), len(fgn_accs)
 
     pay_rows, evt_rows = [], []
+    acct_heat: dict = {}                    # account -> exception-momentum multiplier
     pid = 0
     while len(pay_rows) < cfg.num_payments:
         xborder = rng.random() < cfg.xborder_frac
@@ -349,7 +356,12 @@ def build_dataset(cfg: IndiaConfig):
 
         dte = (start + timedelta(days=int(rng.integers(0, cfg.horizon_days)))).isoformat()
 
-        events, exceptions, status, seconds = simulate_payment(rail, src, dest, amount, rng)
+        heat = acct_heat.get(src.account_id, 1.0)
+        events, exceptions, status, seconds = simulate_payment(rail, src, dest, amount, rng,
+                                                               heat=heat)
+        # account momentum: exceptions raise the account's heat, clean payments cool it.
+        acct_heat[src.account_id] = (min(3.0, heat * (1 + cfg.exception_momentum))
+                                     if exceptions else 1.0 + (heat - 1.0) * 0.5)
 
         row = project_to_pacs008(src, dest, amount, dte, RAIL_STTLM[rail],
                                  assign_risk(src, dest, amount, rng), assign_geo(src, dest),

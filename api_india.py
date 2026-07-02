@@ -48,10 +48,15 @@ app = FastAPI(title="txn-repr India advisory scorer", lifespan=_lifespan)
 class IntakeRequest(BaseModel):
     payments: list[dict] | None = None
     pacs008_xml: str | None = None
+    explain: bool = False          # column-occlusion drivers (faithful; ~20x embed cost)
 
 
 class InflightRequest(BaseModel):
     messages: list[dict]
+
+
+class VelocityRequest(BaseModel):
+    transactions: list[dict]       # an account's recent payment rows (>=2), engine-supplied
 
 
 def _clean(rec: dict) -> dict:
@@ -98,7 +103,26 @@ def score_intake(req: IntakeRequest):
     recs = [_clean(r) for r in res.to_dict(orient="records")]
     for r in recs:
         r["top_exception_risks"] = _risks_as_list(r["top_exception_risks"])
+    if req.explain:
+        if len(df) > 10:
+            raise HTTPException(422, "explain=true is capped at 10 payments per request")
+        for r, drv in zip(recs, _scorer.explain(df)):
+            r["drivers"] = drv
     return {"model": _meta.get("model_dir"), "results": recs}
+
+
+@app.post("/score/velocity")
+def score_velocity(req: VelocityRequest):
+    df = pd.DataFrame(req.transactions)
+    need = {"DbtrAcct_Id", "IntrBkSttlmDt"}
+    if need - set(df.columns):
+        raise HTTPException(422, f"transactions need columns: {sorted(need)}")
+    try:
+        res = _scorer.predict_velocity(df)
+    except SystemExit as e:
+        raise HTTPException(409, str(e))
+    return {"model": _meta.get("model_dir"),
+            "results": [_clean(r) for r in res.to_dict(orient="records")]}
 
 
 @app.post("/score/inflight")

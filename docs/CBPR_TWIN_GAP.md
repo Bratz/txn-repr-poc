@@ -203,6 +203,27 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
   auto-routes message-stream inputs (`msg_type` column) to streaming. Verified on the held-out
   stream CSV: P(booked) discriminates pre-outcome and sharpens as messages arrive.
 
+### Capability closures (post-productization pass)
+- ✅ **Velocity SERVED**: `fit_velocity` pretrains the v2 history encoder over per-account payment
+  sequences at save time; bundle persists `hist.pt` + the burst head; `IndiaScorer.predict_velocity`
+  + `POST /score/velocity` score an account's recent rows STATELESSLY (the engine owns the history
+  store and sends the window — same pattern as /score/inflight). Response carries both the learned
+  `burst_proba` and the transparent `burst_rule` for comparison.
+- ✅ **Attribution SHIPPED**: `IndiaScorer.explain` — column-occlusion drivers (occlude a field →
+  re-embed → probability/ETA delta), faithful by construction, no LLM. `explain: true` on
+  `/score/intake` (capped at 10 payments) adds `drivers: [{field, rail_impact, risk_impact,
+  eta_impact_min}]` per result.
+- ✅ **Temporal-correlation data hook**: `IndiaConfig.exception_momentum` (>0 → an account's
+  exception raises its next payment's exception odds, decaying when clean). Verified: P(exc | prior
+  exc) exceeds P(exc | prior clean) by >5pp at momentum 0.8. **Default 0.0** so published artifacts
+  stay byte-identical; the sequence-encoder-vs-trees re-test on tracker outcomes is now a config
+  flag away, not a data-model change.
+- ⛔ **Explicitly PARKED (L-effort, revisit at real-data phase):** MT↔MX parsing, investigation
+  (camt.026/028/029), forwarding/passthrough hops, bulk order files (SDSC/SDMC/MDMC), value-dating
+  (RED/DED/CED). Parked as decisions, not omissions.
+- 📌 Known ceiling (documented in code): in-flight heads are linear on pooled prefixes — upgrade
+  path is per-k heads or a small sequence model if real-data prefixes get longer/richer.
+
 ### Track R — Rule / Lookup / Template (delisted from ML — build once, deterministic)
 - **P0 · Geo-Cover (Dom/Intl/SEPA), ON-US/OFF-US, duplicate flag** (#11–13): generator/serve rules —
   emit as *features/labels-for-audit*, not TFM heads.
@@ -221,8 +242,9 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
       ETA 199 vs 392). Fresh held-out 100 (known accounts): rail 0.59 (0.64 clean) · risk 0.53.
       **Cold-start finding:** all-new accounts degrade badly (identity features dominate) — noted
       on the deck maturity line; a real-data-phase focus.
-- [ ] **`limit_exceeded` decision**: prevalence ~0.1% with UPI off — restore via genuine >₹5L IMPS
-      injection, or leave delisted (it is a rule-computed gate now, not a twin task).
+- [x] **`limit_exceeded` decision — CLOSED**: stays rule-computed (`violates_cap`), prevalence left
+      realistic. It is a deterministic guard, not a prediction; no reason to inflate the data to
+      make a delisted task learnable.
 - [ ] **Leakage audit as columns grow**: every new column checked for being a deterministic
       consequence of a label (as `SttlmMtd` was) — report per-class / domestic-only / clean slices.
 - [ ] **Sparsity guard**: as message types widen the superset schema, add per-column reconstruction

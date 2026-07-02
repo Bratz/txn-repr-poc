@@ -369,7 +369,7 @@ def main():
     if args.save:
         from data.synth_india_rails import build_messages
         from encoders.quantizer import AdaptiveQuantizer
-        from serve_india import fit_inflight_heads, save_india_model
+        from serve_india import fit_inflight_heads, fit_velocity, save_india_model
         quantizer = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                              pay[vocabs.ccy_col].to_numpy())
         probes = train_probes(e_pay, pay, schema, tr)        # deployable probes (train split)
@@ -377,8 +377,17 @@ def main():
         msg = build_messages(pay, evt)
         probes["inflight"] = fit_inflight_heads(
             encoder, vocabs, msg[msg["payment_id"].isin(tr_ids)], pay, device)
+        # velocity needs dense per-account history: the intake fleet (~5 payments/account,
+        # uniform dates) cannot express bursts, so fit on a denser fleet from the SAME
+        # generator (real active accounts look like this; documented synthetic choice).
+        from data.synth_india_rails import IndiaConfig, build_dataset
+        dense, _, _ = build_dataset(IndiaConfig(
+            num_accounts=60 if args.smoke else 500,
+            num_payments=800 if args.smoke else 12000, seed=41))
+        vel = fit_velocity(encoder, vocabs, dense, device,
+                           hist_epochs=1 if args.smoke else 2)
         path = save_india_model(args.save, enc_cfg=enc_cfg, vocabs=vocabs, quantizer=quantizer,
-                                encoder=encoder, schema=schema, probes=probes)
+                                encoder=encoder, schema=schema, probes=probes, velocity=vel)
         print(f"[save] model -> {path}")
 
     inflight = run_inflight(evt, pay, tr_ids, ev_ids, schema, device, args.inflight_epochs, args.smoke)

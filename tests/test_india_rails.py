@@ -240,6 +240,20 @@ def test_amount_split_models_fx_and_charges():
     assert (pay["charges"] > 0).all()                        # every payment carries a fee
 
 
+def test_exception_momentum_creates_temporal_correlation():
+    # with momentum ON, an account's exception raises the odds its NEXT payment excepts too;
+    # with the default (0.0) the generator's output is unchanged (published artifacts stable).
+    pay, _, _ = build_dataset(IndiaConfig(num_accounts=250, num_payments=8000, seed=23,
+                                          exception_momentum=0.8))
+    exc_cols = [f"exc_{c}" for c in EXCEPTION_CODES]
+    pay = pay.sort_values("payment_id")                      # generation order = heat order
+    pay["has_exc"] = pay[exc_cols].sum(axis=1) > 0
+    prev = pay.groupby("DbtrAcct_Id")["has_exc"].shift(1)
+    after_exc = pay.loc[prev == True, "has_exc"].mean()
+    after_ok = pay.loc[prev == False, "has_exc"].mean()
+    assert after_exc > after_ok + 0.05                       # real, learnable correlation
+
+
 def test_reproducible():
     p1, _, _ = build_dataset(IndiaConfig(num_accounts=200, num_payments=1500, seed=7))
     p2, _, _ = build_dataset(IndiaConfig(num_accounts=200, num_payments=1500, seed=7))

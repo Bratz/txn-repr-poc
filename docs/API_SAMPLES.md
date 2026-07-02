@@ -312,3 +312,104 @@ Same UETR after pacs.002 ACSC + camt.054 BOOK: booked snaps ~1, ETA-remaining ->
 ```
 
 A bundle without the in-flight heads returns **409** with a retrain hint.
+
+## 7. POST /score/velocity — per-account burst (stateless: engine sends the history)
+
+Request: `{"transactions": [ <an account's recent payment rows, >=2> ]}` — needs `DbtrAcct_Id` + `IntrBkSttlmDt` + the feature columns.
+
+**Response 200** (`burst_proba` = learned time-aware head — uncalibrated ranking; `burst_rule` = the transparent last-gaps rule, returned for comparison):
+
+```json
+{
+  "model": "model_india",
+  "results": [
+    {
+      "actor": "ET6FRDFR",
+      "n_txns": 11,
+      "burst_proba": 0.9557,
+      "burst_rule": 0
+    },
+    {
+      "actor": "KWQ5Q4GZ",
+      "n_txns": 11,
+      "burst_proba": 0.9962,
+      "burst_rule": 1
+    },
+    {
+      "actor": "STIZ7XQD",
+      "n_txns": 11,
+      "burst_proba": 0.8586,
+      "burst_rule": 0
+    }
+  ]
+}
+```
+
+
+## 8. POST /score/intake with `"explain": true` — faithful drivers (column occlusion)
+
+Capped at 10 payments/request (~20x embed cost). `drivers` = top fields by impact: occlude the field, re-embed, measure the probability/ETA shift. No LLM involved.
+
+```json
+{
+  "model": "model_india",
+  "results": [
+    {
+      "payment_id": 20000,
+      "rail_pred": "IMPS",
+      "rail_conf": 0.599,
+      "status_pred": "STP",
+      "eta_min_pred": 4.7,
+      "risk_pred": "Low",
+      "geography_pred": "Asia",
+      "expense_pred": "Operational",
+      "top_exception_risks": [
+        {
+          "code": "sla_breach",
+          "score": 0.7
+        },
+        {
+          "code": "beneficiary_unreachable",
+          "score": 0.39
+        },
+        {
+          "code": "below_min",
+          "score": 0.3
+        }
+      ],
+      "drivers": [
+        {
+          "field": "CdtrAcct_Id",
+          "rail_impact": 0.5544,
+          "risk_impact": 0.1276,
+          "eta_impact_min": -466.3
+        },
+        {
+          "field": "Ccy",
+          "rail_impact": -0.032,
+          "risk_impact": 0.644,
+          "eta_impact_min": 34.0
+        },
+        {
+          "field": "DbtrAcct_Id",
+          "rail_impact": 0.5477,
+          "risk_impact": -0.1028,
+          "eta_impact_min": -371.6
+        },
+        {
+          "field": "UltmtCdtr_Id",
+          "rail_impact": -0.0664,
+          "risk_impact": 0.2246,
+          "eta_impact_min": -14.8
+        },
+        {
+          "field": "identifier_type",
+          "rail_impact": -0.2732,
+          "risk_impact": 0.0023,
+          "eta_impact_min": -177.5
+        }
+      ]
+    }
+  ]
+}
+```

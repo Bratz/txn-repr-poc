@@ -25,13 +25,16 @@ def test_save_load_predict_roundtrip(tmp_path):
 
     probes = train_probes(e, pay, schema, np.arange(len(pay)))
     from data.synth_india_rails import build_messages
-    from serve_india import fit_inflight_heads
+    from serve_india import fit_inflight_heads, fit_velocity
     msg = build_messages(pay, evt)
     probes["inflight"] = fit_inflight_heads(enc, vocabs, msg, pay, "cpu", max_uetrs=300)
+    # velocity fits on a DENSER fleet (~15 payments/account) - the intake fleet is too sparse
+    dense, _, _ = build_dataset(IndiaConfig(num_accounts=40, num_payments=600, seed=7))
+    vel = fit_velocity(enc, vocabs, dense, "cpu", hist_epochs=1)
     quant = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                     pay[vocabs.ccy_col].to_numpy())
     save_india_model(tmp_path / "m", enc_cfg=cfg, vocabs=vocabs, quantizer=quant,
-                     encoder=enc, schema=schema, probes=probes)
+                     encoder=enc, schema=schema, probes=probes, velocity=vel)
 
     # reload in a clean scorer (no retraining) and predict
     scorer = load_india_model(tmp_path / "m", device="cpu")
@@ -98,3 +101,19 @@ def test_save_load_predict_roundtrip(tmp_path):
     from serve_india import _prefix_features
     x = _prefix_features(np.zeros(cfg.hidden), msg.head(2))
     assert x.shape[0] == cfg.hidden + len(MSG_TYPES) + len(TX_STS) + 2
+
+    # velocity: served statelessly from caller-supplied history (>=2 rows per account)
+    if vel is not None and vel["head"] is not None:
+        actors = dense["DbtrAcct_Id"].value_counts()
+        busy = dense[dense["DbtrAcct_Id"].isin(actors[actors >= 5].index[:5])]
+        v = scorer.predict_velocity(busy)
+        assert {"actor", "n_txns", "burst_proba", "burst_rule"} <= set(v.columns)
+        assert len(v) and v["burst_proba"].between(0, 1).all()
+        bare_scorer = IndiaScorer(enc, vocabs, probes, "cpu")   # no hist -> loud failure
+        with pytest.raises(SystemExit):
+            bare_scorer.predict_velocity(busy)
+
+    # explain: column-occlusion drivers - faithful fields, bounded top-k
+    drv = scorer.explain(sub.head(2), top_k=4)
+    assert len(drv) == 2 and all(len(d) <= 4 for d in drv)
+    assert {"field", "rail_impact", "risk_impact", "eta_impact_min"} <= set(drv[0][0])
