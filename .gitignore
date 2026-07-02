@@ -50,3 +50,6 @@ venv/
 # scratch run logs / generated test schema
 *.err
 data/_test100_schema.json
+results_impute_full.json
+results_impute_val.json
+results_msgseq.json

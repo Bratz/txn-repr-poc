@@ -205,7 +205,13 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
   `write_pacs008` templating.
 
 ### Review checklist (run alongside enhancements)
-- [ ] **Full (non-smoke) run** for real A/B/C/D numbers (smoke encoder is near-chance).
+- [x] **Full (non-smoke) run** — validated at real config (8k, full 25M encoder): ETA 186 vs 232
+      naive (-20%), charges MAE 97 vs 185 (-48%), streaming booked 0.84→0.87; STP/reason at/below
+      naive baselines (C2 confirmed — tree territory); cancel/return heads ~chance at this rarity.
+      Servable model retrained on the 20k UPI-free set (rail 0.55 probe / 0.64 tree / status 0.26;
+      ETA 199 vs 392). Fresh held-out 100 (known accounts): rail 0.59 (0.64 clean) · risk 0.53.
+      **Cold-start finding:** all-new accounts degrade badly (identity features dominate) — noted
+      on the deck maturity line; a real-data-phase focus.
 - [ ] **`limit_exceeded` decision**: prevalence ~0.1% with UPI off — restore via genuine >₹5L IMPS
       injection, or leave delisted (it is a rule-computed gate now, not a twin task).
 - [ ] **Leakage audit as columns grow**: every new column checked for being a deterministic
