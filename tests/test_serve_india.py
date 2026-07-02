@@ -79,6 +79,10 @@ def test_save_load_predict_roundtrip(tmp_path):
     pre = some[~some["msg_type"].isin(["pacs.002", "camt.054", "pacs.004"])]
     st_pre = scorer.predict_stream(pre)
     assert len(st_pre) and st_pre["booked_proba"].between(0, 1).all()
+    # snap-on-outcome: once camt.054 (BOOK) is the last message seen, the score must be high -
+    # the last-message one-hot makes the outcome directly readable, not diluted by the pool.
+    snapped = st[st["last_msg_type"] == "camt.054"]
+    assert len(snapped) and (snapped["booked_proba"] > 0.5).all()
     # an old-style bundle (no in-flight head) fails loudly, not silently
     import pytest
     bare = {k: v for k, v in probes.items() if k != "inflight_booked"}

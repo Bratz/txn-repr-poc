@@ -56,6 +56,26 @@ def _embed_messages(encoder, vocabs, msg, device):
     return embed_all_rows(encoder, vocabs.encode(msg), len(msg), device).cpu().numpy()
 
 
+def _prefix_features(pool, last_row):
+    """In-flight feature vector = mean-pooled embeddings + one-hot(last msg_type, last tx_sts).
+
+    The explicit last-message signal exists because mean-pooling dilutes an outcome message to
+    1/k of the pool: without it the score failed to snap after pacs.002/camt.054 arrived. With
+    it, 'camt.054 seen' / 'pacs.002 RJCT seen' are directly readable by the head.
+    """
+    from data.iso_lifecycle import MSG_TYPES, TX_STS
+    mt = np.zeros(len(MSG_TYPES), dtype=np.float32)
+    m = last_row.get("msg_type")
+    if m in MSG_TYPES:
+        mt[MSG_TYPES.index(m)] = 1.0
+    st = np.zeros(len(TX_STS), dtype=np.float32)
+    s = last_row.get("tx_sts")
+    s = "" if (s is None or (isinstance(s, float) and np.isnan(s))) else str(s)
+    if s in TX_STS:
+        st[TX_STS.index(s)] = 1.0
+    return np.concatenate([pool, mt, st])
+
+
 def fit_inflight_head(encoder, vocabs, msg, device, max_uetrs=4000, log=print):
     """Fit the streaming 'will it be booked?' head on message-prefix pools.
 
@@ -78,7 +98,7 @@ def fit_inflight_head(encoder, vocabs, msg, device, max_uetrs=4000, log=print):
         idx = g.index.to_numpy()
         csum = np.cumsum(e[idx], axis=0)
         for k in range(1, len(idx) + 1):
-            X.append(csum[k - 1] / k)
+            X.append(_prefix_features(csum[k - 1] / k, g.iloc[k - 1]))
             y.append(int(booked[u]))
     X, y = np.asarray(X), np.asarray(y)
     head = LogisticRegression(max_iter=1000, class_weight="balanced").fit(X, y)
@@ -223,10 +243,13 @@ class IndiaScorer:
         rows = []
         for u, g in msg.groupby("end_to_end_id", sort=False):
             idx = g.index.to_numpy()
-            pool = e[idx].mean(0, keepdims=True)         # same op fit_inflight_head trained on
+            x = _prefix_features(e[idx].mean(0), g.iloc[-1])  # same op fit_inflight_head used
+            if head.n_features_in_ != x.shape[0]:
+                raise SystemExit("in-flight head predates the current feature format - "
+                                 "refit with `run_india.py --save`")
             rows.append({"end_to_end_id": u, "n_msgs": int(len(idx)),
                          "last_msg_type": g["msg_type"].iloc[-1],
-                         "booked_proba": round(float(head.predict_proba(pool)[0, 1]), 4)})
+                         "booked_proba": round(float(head.predict_proba(x[None])[0, 1]), 4)})
         return pd.DataFrame(rows)
 
 
