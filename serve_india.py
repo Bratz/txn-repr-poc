@@ -42,6 +42,25 @@ _HIST = "hist.pt"
 # Velocity (per-account burst) - the v2 time-aware history encoder, served
 # --------------------------------------------------------------------------- #
 
+def fit_exception_calibration(probes, e_ev, pay_ev, log=print):
+    """Isotonic calibrators for the per-exception intake probes, fit on held-out rows.
+    Stored as probes['exc_cal']; predict() applies them when present."""
+    cals = {}
+    for code, m in probes.get("exc", {}).items():
+        col = f"exc_{code}"
+        if col not in pay_ev.columns:
+            continue
+        y = pay_ev[col].to_numpy()
+        if y.sum() >= 5 and y.mean() < 1.0:
+            iso = _fit_iso(m.predict_proba(e_ev)[:, 1], y)
+            if iso is not None:
+                cals[code] = iso
+    probes["exc_cal"] = cals
+    log(f"[calibration] exception calibrators fit for {len(cals)} codes on "
+        f"{len(pay_ev):,} held-out rows")
+    return probes
+
+
 def fit_velocity(encoder, vocabs, pay, device, hist_epochs=2, burst_k=2,
                  burst_min_events=4, log=print):
     """Pretrain a small history encoder over per-account payment sequences (frozen per-row
@@ -76,12 +95,17 @@ def fit_velocity(encoder, vocabs, pay, device, hist_epochs=2, burst_k=2,
     # ponytail: burst window relaxed vs run_seq's defaults (k=3/min 6) - India accounts
     # average ~5 payments, so the stricter window is all-zeros here. Still timing-only.
     yv = velocity_labels(seqs, k=burst_k, min_events=burst_min_events)
-    head = (LogisticRegression(max_iter=1000, class_weight="balanced").fit(h, yv)
-            if len(set(yv.tolist())) > 1 else None)
+    # head on 80% of accounts, isotonic calibration on the held-out 20%
+    perm = np.random.default_rng(0).permutation(len(seqs)); cut = int(len(seqs) * 0.8)
+    head, cal = None, None
+    if len(set(yv.tolist())) > 1 and len(set(yv[perm[:cut]].tolist())) > 1:
+        head = LogisticRegression(max_iter=1000, class_weight="balanced").fit(
+            h[perm[:cut]], yv[perm[:cut]])
+        cal = _fit_iso(head.predict_proba(h[perm[cut:]])[:, 1], yv[perm[cut:]])
     log(f"[velocity] hist encoder + head fit on {len(seqs):,} account sequences "
         f"(burst prevalence {yv.mean():.3f}{'' if head else '; head degenerate -> None'})")
     return {"hcfg": asdict(hcfg), "recon_fields": recon_fields,
-            "state": hist.state_dict(), "head": head}
+            "state": hist.state_dict(), "head": head, "cal": cal}
 
 
 # --------------------------------------------------------------------------- #
@@ -101,6 +125,25 @@ def _embed_messages(encoder, vocabs, msg, device):
     """Embed message rows WITHOUT the intake drift warning - sparse UNK columns are the
     designed shape of a lifecycle message, not vocab drift."""
     return embed_all_rows(encoder, vocabs.encode(msg), len(msg), device).cpu().numpy()
+
+
+# --------------------------------------------------------------------------- #
+# Calibration - isotonic, fit on held-out data, applied wherever a proba is emitted
+# --------------------------------------------------------------------------- #
+
+def _fit_iso(p_raw, y):
+    """Isotonic calibrator raw-score -> P(y=1); None if the label is degenerate."""
+    from sklearn.isotonic import IsotonicRegression
+    y = np.asarray(y)
+    if len(set(y.tolist())) < 2:
+        return None
+    return IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip").fit(
+        np.asarray(p_raw, dtype=float), y)
+
+
+def _cal1(iso, p):
+    """Apply a calibrator to a scalar proba (identity if None)."""
+    return float(p) if iso is None else float(iso.predict(np.atleast_1d(float(p)))[0])
 
 
 def _prefix_times(g):
@@ -136,7 +179,8 @@ def _prefix_features(pool, g):
     return np.concatenate([pool, mt, st, tail])
 
 
-def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, log=print):
+def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, msg_eval=None,
+                       log=print):
     """Fit the in-flight lifecycle heads on message-prefix pools -> dict of sklearn heads.
 
     Trains on ALL visible prefixes (k=1..n) per UETR, so every head is valid at any lifecycle
@@ -152,29 +196,34 @@ def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, log=pr
     full-corpus embedding is minutes of CPU); raise the cap if a head ever looks data-bound.
     """
     from sklearn.linear_model import LogisticRegression, Ridge
-    msg = _visible_sorted(msg)
-    keep = msg["end_to_end_id"].drop_duplicates().head(max_uetrs)
-    msg = msg[msg["end_to_end_id"].isin(set(keep))].reset_index(drop=True)
-    e = _embed_messages(encoder, vocabs, msg, device)
-    booked = msg.groupby("end_to_end_id")["msg_type"].agg(lambda s: int("camt.054" in set(s)))
-    lab = pay.set_index("payment_id")
-    X, y = [], {k: [] for k in ("booked", "outcome", "reason", "eta", "cancel", "return")}
-    for u, g in msg.groupby("end_to_end_id", sort=False):
-        row = lab.loc[int(g["payment_id"].iloc[0])]
-        total = float(row.get("time_to_settle_min", 0.0) or 0.0)
-        idx = g.index.to_numpy()
-        csum = np.cumsum(e[idx], axis=0)
-        for k in range(1, len(idx) + 1):
-            gk = g.iloc[:k]
-            X.append(_prefix_features(csum[k - 1] / k, gk))
-            t_last, _ = _prefix_times(gk)
-            y["booked"].append(int(booked[u]))
-            y["outcome"].append(str(row.get("terminal_status", "STP")))
-            y["reason"].append(str(row.get("reject_reason", "none")))
-            y["eta"].append(np.log1p(max(total - t_last, 0.0)))
-            y["cancel"].append(int(row.get("cancel_requested", 0)))
-            y["return"].append(int(row.get("returned", 0)))
-    X = np.asarray(X)
+
+    def _prefix_xy(frame):
+        frame = _visible_sorted(frame)
+        keep = frame["end_to_end_id"].drop_duplicates().head(max_uetrs)
+        frame = frame[frame["end_to_end_id"].isin(set(keep))].reset_index(drop=True)
+        e = _embed_messages(encoder, vocabs, frame, device)
+        booked = frame.groupby("end_to_end_id")["msg_type"].agg(
+            lambda s: int("camt.054" in set(s)))
+        lab = pay.set_index("payment_id")
+        X, y = [], {k: [] for k in ("booked", "outcome", "reason", "eta", "cancel", "return")}
+        for u, g in frame.groupby("end_to_end_id", sort=False):
+            row = lab.loc[int(g["payment_id"].iloc[0])]
+            total = float(row.get("time_to_settle_min", 0.0) or 0.0)
+            idx = g.index.to_numpy()
+            csum = np.cumsum(e[idx], axis=0)
+            for k in range(1, len(idx) + 1):
+                gk = g.iloc[:k]
+                X.append(_prefix_features(csum[k - 1] / k, gk))
+                t_last, _ = _prefix_times(gk)
+                y["booked"].append(int(booked[u]))
+                y["outcome"].append(str(row.get("terminal_status", "STP")))
+                y["reason"].append(str(row.get("reject_reason", "none")))
+                y["eta"].append(np.log1p(max(total - t_last, 0.0)))
+                y["cancel"].append(int(row.get("cancel_requested", 0)))
+                y["return"].append(int(row.get("returned", 0)))
+        return np.asarray(X), y, len(keep)
+
+    X, y, n_uetrs = _prefix_xy(msg)
 
     def _clf(target):
         arr = np.asarray(y[target])
@@ -185,9 +234,25 @@ def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, log=pr
     heads = {"booked": _clf("booked"), "outcome": _clf("outcome"), "reason": _clf("reason"),
              "eta_remaining": Ridge().fit(X, np.asarray(y["eta"])),
              "cancel": _clf("cancel"), "return": _clf("return")}
-    log(f"[inflight] lifecycle heads fit on {len(X):,} prefixes from {len(keep):,} payments "
+    log(f"[inflight] lifecycle heads fit on {len(X):,} prefixes from {n_uetrs:,} payments "
         f"(booked prevalence {np.mean(y['booked']):.2f}; "
         f"degenerate: {[k for k, h in heads.items() if h is None]})")
+
+    if msg_eval is not None and len(msg_eval):
+        X2, y2, _ = _prefix_xy(msg_eval)
+        cal = {}
+        for k in ("booked", "cancel", "return"):
+            h = heads.get(k)
+            if h is not None:
+                cal[k] = _fit_iso(h.predict_proba(X2)[:, 1], np.asarray(y2[k]))
+        oc = heads.get("outcome")
+        if oc is not None:
+            p = oc.predict_proba(X2)
+            yo = np.asarray(y2["outcome"])
+            cal["outcome"] = {c: _fit_iso(p[:, i], (yo == c).astype(int))
+                              for i, c in enumerate(oc.classes_)}
+        heads["_cal"] = cal
+        log(f"[inflight] isotonic calibration fit on {len(X2):,} held-out prefixes")
     return heads
 
 
@@ -204,7 +269,8 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
     if velocity is not None:
         torch.save({k: velocity[k] for k in ("hcfg", "recon_fields", "state")},
                    save_dir / _HIST)
-        probes = {**probes, "velocity": velocity["head"]}
+        probes = {**probes, "velocity": velocity["head"],
+                  "velocity_cal": velocity.get("cal")}
     torch.save({
         "enc_cfg": asdict(enc_cfg),
         "schema_buckets": schema["buckets"],
@@ -304,7 +370,12 @@ class IndiaScorer:
         out["eta_min_pred"] = np.clip(self.probes["eta"].predict(e), 0, None).round(1)
         for tname, m in self.probes.get("tasks", {}).items():   # §5 heads (risk/geo/expense)
             out[f"{tname}_pred"] = m.predict(e)
-        risks = {n: m.predict_proba(e)[:, 1] for n, m in self.probes["exc"].items()}
+        exc_cal = self.probes.get("exc_cal", {})
+        risks = {}
+        for n, m in self.probes["exc"].items():
+            p = m.predict_proba(e)[:, 1]
+            iso = exc_cal.get(n)
+            risks[n] = iso.predict(p) if iso is not None else p
         names = list(risks)
         R = np.vstack([risks[n] for n in names]).T if names else np.zeros((len(df), 0))
         topk = []
@@ -340,13 +411,21 @@ class IndiaScorer:
             if heads["booked"].n_features_in_ != x.shape[1]:
                 raise SystemExit("in-flight heads predate the current feature format - "
                                  "refit with `run_india.py --save`")
+            cal = heads.get("_cal", {})
             out = {"end_to_end_id": u, "n_msgs": int(len(idx)),
                    "last_msg_type": g["msg_type"].iloc[-1],
-                   "booked_proba": round(float(heads["booked"].predict_proba(x)[0, 1]), 4)}
+                   "booked_proba": round(_cal1(cal.get("booked"),
+                                               heads["booked"].predict_proba(x)[0, 1]), 4)}
             oc = heads.get("outcome")
-            out["settlement_outcome"] = ({c: round(float(p), 4) for c, p in
-                                          zip(oc.classes_, oc.predict_proba(x)[0])}
-                                         if oc is not None else None)
+            if oc is not None:
+                p = oc.predict_proba(x)[0]
+                occal = cal.get("outcome") or {}
+                p = np.array([_cal1(occal.get(c), pi) for c, pi in zip(oc.classes_, p)])
+                p = p / max(p.sum(), 1e-9)                   # calibrated per-class, renormed
+                out["settlement_outcome"] = {c: round(float(pi), 4)
+                                             for c, pi in zip(oc.classes_, p)}
+            else:
+                out["settlement_outcome"] = None
             out["eta_remaining_min"] = round(float(np.clip(
                 np.expm1(heads["eta_remaining"].predict(x)[0]), 0, None)), 1)
             rs = heads.get("reason")
@@ -360,7 +439,7 @@ class IndiaScorer:
                 out["reject_reason_if_failed"] = None
             for name, key in (("cancel_proba", "cancel"), ("return_proba", "return")):
                 h = heads.get(key)
-                out[name] = (round(float(h.predict_proba(x)[0, 1]), 4)
+                out[name] = (round(_cal1(cal.get(key), h.predict_proba(x)[0, 1]), 4)
                              if h is not None else None)
             rows.append(out)
         return pd.DataFrame(rows)
@@ -384,6 +463,9 @@ class IndiaScorer:
             return pd.DataFrame(columns=["actor", "n_txns", "burst_proba", "burst_rule"])
         h = encode_histories(self.hist, e_all, seqs, self.device).cpu().numpy()
         proba = self.velocity_head.predict_proba(h)[:, 1]
+        iso = self.probes.get("velocity_cal")
+        if iso is not None:
+            proba = iso.predict(proba)
         rule = velocity_labels(seqs, k=2, min_events=4)      # same window the head was fit on
         return pd.DataFrame({"actor": [s["actor"] for s in seqs],
                              "n_txns": [len(s["pos"]) for s in seqs],

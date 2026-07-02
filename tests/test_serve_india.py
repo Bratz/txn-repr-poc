@@ -27,7 +27,12 @@ def test_save_load_predict_roundtrip(tmp_path):
     from data.synth_india_rails import build_messages
     from serve_india import fit_inflight_heads, fit_velocity
     msg = build_messages(pay, evt)
-    probes["inflight"] = fit_inflight_heads(enc, vocabs, msg, pay, "cpu", max_uetrs=300)
+    half = set(pay["payment_id"].head(len(pay) // 2))
+    probes["inflight"] = fit_inflight_heads(
+        enc, vocabs, msg[msg["payment_id"].isin(half)], pay, "cpu", max_uetrs=300,
+        msg_eval=msg[~msg["payment_id"].isin(half)])
+    from serve_india import fit_exception_calibration
+    fit_exception_calibration(probes, e[len(pay) // 2:], pay.iloc[len(pay) // 2:])
     # velocity fits on a DENSER fleet (~15 payments/account) - the intake fleet is too sparse
     dense, _, _ = build_dataset(IndiaConfig(num_accounts=40, num_payments=600, seed=7))
     vel = fit_velocity(enc, vocabs, dense, "cpu", hist_epochs=1)

@@ -369,14 +369,17 @@ def main():
     if args.save:
         from data.synth_india_rails import build_messages
         from encoders.quantizer import AdaptiveQuantizer
-        from serve_india import fit_inflight_heads, fit_velocity, save_india_model
+        from serve_india import (fit_exception_calibration, fit_inflight_heads,
+                                 fit_velocity, save_india_model)
         quantizer = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                              pay[vocabs.ccy_col].to_numpy())
         probes = train_probes(e_pay, pay, schema, tr)        # deployable probes (train split)
-        # in-flight lifecycle heads: fit on TRAIN-split payments' message prefixes only.
+        # in-flight lifecycle heads: fit on TRAIN-split prefixes, calibrate on EVAL-split.
         msg = build_messages(pay, evt)
         probes["inflight"] = fit_inflight_heads(
-            encoder, vocabs, msg[msg["payment_id"].isin(tr_ids)], pay, device)
+            encoder, vocabs, msg[msg["payment_id"].isin(tr_ids)], pay, device,
+            msg_eval=msg[msg["payment_id"].isin(ev_ids)])
+        fit_exception_calibration(probes, e_pay[ev], pay.iloc[ev])
         # velocity needs dense per-account history: the intake fleet (~5 payments/account,
         # uniform dates) cannot express bursts, so fit on a denser fleet from the SAME
         # generator (real active accounts look like this; documented synthetic choice).
