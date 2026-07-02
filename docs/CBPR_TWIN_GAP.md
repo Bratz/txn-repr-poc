@@ -183,12 +183,15 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
 - **P1 · Repair-type / which-queue head** (#17): multiclass on the queue label from Track D.
 - **P2 · gpi next-tracker-status** (#2, sequence) — ✅ **DONE** (`run_msgseq.py`): v2 history encoder
   over the pre-outcome message prefix (pain.001/pacs.008/pacs.009) → 3-class tracker outcome
-  (ACSC/ACSP-G002/RJCT), vs an order-blind pooled baseline. **Honest result:** sequence ≈ pooled
-  (smoke +2.3pp macro-F1, within noise) — within-payment prefixes are short + fixed-order, so the
-  sequence adds little beyond the bag-of-messages. Where the history encoder genuinely wins is LONG
-  per-ENTITY histories with temporal correlation (run_seq velocity +44pp / C3 +26pp); reproducing
-  that for tracker outcomes needs the generator to correlate an account's successive payments — a
-  future data change, documented not faked. Upgrade hook is in place.
+  (ACSC/ACSP-G002/RJCT), vs an order-blind pooled baseline. **Honest result (re-tested):** sequence
+  ≈ pooled (−0.6pp macro-F1 after the timestamp fix; the original +2.3pp was noise AND confounded by
+  linearly-interpolated timestamps whose dt carried no information). Timestamps are now
+  EVENT-ANCHORED to the workflow log and prefixes are ENGINE-VISIBILITY filtered (inward payments
+  start at pacs.008 IN — their pain.* legs live at the remote bank), so the null is clean:
+  within-payment prefixes are short + fixed-order and add nothing beyond the bag-of-messages. Where
+  the history encoder genuinely wins is LONG per-ENTITY histories with temporal correlation
+  (run_seq velocity +44pp / C3 +26pp); reproducing that for tracker outcomes needs the generator to
+  correlate an account's successive payments — a future data change, documented not faked.
 - **P2 · Charges regression** (#10) — ✅ **DONE** (`run_impute` head G): predicts `charges` from
   `f(x)`; beats the mean baseline even at smoke (MAE 145 vs 179) since charges is bps-of-amount and
   the encoder sees the amount. `fx_rate` is deliberately NOT a head — it is market noise.

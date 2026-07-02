@@ -62,6 +62,10 @@ OWNED = {
     # status/notification: sparse - echo amount+ccy (+ settlement date once known).
     "pain.002": {"IntrBkSttlmAmt", "Ccy"},
     "pacs.002": {"IntrBkSttlmAmt", "Ccy", "IntrBkSttlmDt"},
+    # camt.054 is strictly the CREDITOR-side notification; on the outward leg the debtor bank
+    # really tracks completion via gpi trck/pacs.002 confirmations. We emit one camt.054 as the
+    # booked end-state and let MSG_FLOW mark it IN on the outward perspective - a documented
+    # simplification, not a message-standard claim.
     "camt.054": {"IntrBkSttlmAmt", "Ccy", "IntrBkSttlmDt",
                  "CdtrAcct_Id", "Cdtr_Nm", "Cdtr_Ctry"},
     # cancellation request / resolution: sparse, reference the payment by amount+ccy.
@@ -96,6 +100,24 @@ ENRICH_ADDS = [
 # Documented synthetic split; reorder for a real engine's submission boundary.
 PRE_SUBMISSION = {"validation", "min_amount_check", "limit_check", "enrichment",
                   "vpa_resolution", "beneficiary_resolution", "fraud_risk", "aml"}
+
+# Per-message flow relative to OUR bank, given the payment's direction. outward = we are the
+# debtor agent (pain.001 IN from the customer, clearing legs OUT, confirmations IN); inward =
+# we are the creditor agent (pain.* NOT visible - they live at the remote debtor's bank).
+# NOTE: camt.056 direction assumes ORIGINATOR-initiated recall (the only kind the generator
+# produces); if beneficiary-initiated recalls are ever added, this map must grow a case.
+MSG_FLOW = {
+    "outward": {"pain.001": "IN", "pain.002": "OUT", "pacs.008": "OUT", "pacs.009": "OUT",
+                "pacs.002": "IN", "camt.054": "IN", "camt.056": "OUT", "camt.029": "IN",
+                "pacs.004": "IN"},
+    "inward":  {"pacs.008": "IN", "pacs.009": "IN", "pacs.002": "OUT", "camt.054": "OUT",
+                "camt.056": "IN", "camt.029": "OUT", "pacs.004": "OUT"},
+}
+
+# Deterministic post-settlement lags (minutes) for the exception legs - a documented synthetic
+# choice (real returns/recalls take hours-days and vary).
+RETURN_LAG_MIN = 60.0      # account_closed bounce: credit fails shortly after settlement
+RECALL_LAG_MIN = 240.0     # originator recall: request / resolution / return, spaced 4h apart
 
 # exception code (synth_india_rails) -> indicative ISO ExternalStatusReason code.
 REASON = {
@@ -137,80 +159,100 @@ def _project_message(pay_row, msg_type, reverse=False):
 
 
 def _halting_cause(events):
-    """Last (step, excode) whose excode is a real exception ('none' = clean/repaired)."""
-    for step, excode in reversed(list(events)):
-        if excode and excode != "none":
-            return step, excode
+    """Last (step, excode[, t]) whose excode is a real exception ('none' = clean/repaired)."""
+    for e in reversed(list(events)):
+        if e[1] and e[1] != "none":
+            return e[0], e[1]
     return None, None
 
 
 def lifecycle_messages(pay_row, status, events):
     """Emit the ISO message sequence for one payment as a list of encodable rows.
 
-    events: iterable of (step, excode) for this payment (from the event log). status: the
-    payment's terminal_status. Each returned row = the owned pacs.008 columns + lifecycle
-    metadata (msg_type, tx_sts, sts_reason, end_to_end_id, seq).
+    events: iterable of (step, excode) or (step, excode, t_min) for this payment (from the
+    event log). status: the payment's terminal_status. Each returned row = the owned pacs.008
+    columns + lifecycle metadata (msg_type, tx_sts, sts_reason, end_to_end_id, seq,
+    t_offset_min, msg_direction, visible).
+
+    Timestamps are ANCHORED to the workflow event times when events carry t_min: pain.001 at 0,
+    pain.002/pacs.008 at debtor-bank acceptance (last pre-submission step), pacs.002/camt.054
+    at settlement completion, and the exception legs (pacs.004, camt.056/029) at deterministic
+    lags AFTER settlement. Without t_min (legacy 2-tuples), falls back to a linear spread.
     """
     pid = int(pay_row["payment_id"])
     e2e = f"E2E-{pid:08d}"
-    halt_step, halt_exc = _halting_cause(events)
+    ev = [(e[0], e[1], float(e[2]) if len(e) > 2 else None) for e in events]
+    halt_step, halt_exc = _halting_cause(ev)
     reason = REASON.get(halt_exc, "NARR") if halt_exc else ""
-    total = float(pay_row.get("time_to_settle_min", 0.0) or 0.0)  # minutes to the last message
+    total = float(pay_row.get("time_to_settle_min", 0.0) or 0.0)  # minutes to workflow end
+    anchored = bool(ev) and all(t is not None for _, _, t in ev)
+    # debtor-bank acceptance time = last pre-submission step completed (0 if unknown).
+    accept_t = (max((t for s, _, t in ev if s in PRE_SUBMISSION), default=0.0)
+                if anchored else None)
     cancel_requested = int(pay_row.get("cancel_requested", 0))
     cancel_status = pay_row.get("cancel_status", "none")
     return_reason = pay_row.get("return_reason", "") or ""
+    direction = pay_row.get("direction", UNKNOWN)
 
     out, seq = [], 0
 
-    def emit(mtype, tx_sts="", rsn="", reverse=False):
+    def emit(mtype, tx_sts="", rsn="", reverse=False, t=None):
         nonlocal seq
         row = _project_message(pay_row, mtype, reverse=reverse)
+        flow = MSG_FLOW.get(direction, {}).get(mtype)
         row.update(payment_id=pid, seq=seq, msg_type=mtype, tx_sts=tx_sts,
                    sts_reason=rsn, end_to_end_id=e2e,
-                   rail=pay_row.get("rail", UNKNOWN),
-                   direction=pay_row.get("direction", UNKNOWN))
+                   rail=pay_row.get("rail", UNKNOWN), direction=direction,
+                   msg_direction=flow, visible=int(flow is not None),
+                   t_offset_min=round(t, 3) if t is not None else None)
         out.append(row)
         seq += 1
 
-    emit("pain.001")
+    emit("pain.001", t=0.0 if anchored else None)
     # rejected at the debtor bank before interbank submission -> stops at pain.002 (no recall).
     if status == "REJECTED" and halt_step in PRE_SUBMISSION:
-        emit("pain.002", "RJCT", reason)
-        return _stamp_offsets(out, total)
-    emit("pain.002", "ACCP")
-    emit("pacs.008")
+        emit("pain.002", "RJCT", reason, t=total if anchored else None)
+        return _finalize_offsets(out, total)
+    emit("pain.002", "ACCP", t=accept_t)
+    emit("pacs.008", t=accept_t)             # submitted to clearing on acceptance
     # cross-border cover method: a pacs.009 COV funds the correspondent alongside the pacs.008.
     if pay_row.get("SttlmMtd") == "COVE":
-        emit("pacs.009")
+        emit("pacs.009", t=accept_t)
 
-    # --- clearing outcome ------------------------------------------------------ #
+    # --- clearing outcome (settlement completes at `total`) --------------------- #
     auto_return = status == "REJECTED" and halt_exc == "account_closed"
     if status == "REJECTED":
         if auto_return:                      # settled to creditor bank, then credit bounced
-            emit("pacs.002", "ACSC")
-            emit("pacs.004", "", return_reason or REASON["account_closed"], reverse=True)
+            emit("pacs.002", "ACSC", t=total if anchored else None)
+            emit("pacs.004", "", return_reason or REASON["account_closed"], reverse=True,
+                 t=total + RETURN_LAG_MIN if anchored else None)
         else:                                # rejected before/at settlement
-            emit("pacs.002", "RJCT", reason)
+            emit("pacs.002", "RJCT", reason, t=total if anchored else None)
     elif status == "MANUAL_REVIEW":          # held in repair -> gpi tracker ACSP + G002
-        emit("pacs.002", "ACSP", "G002")
+        emit("pacs.002", "ACSP", "G002", t=total if anchored else None)
     else:                                    # STP / REPAIRED: settled and credited
-        emit("pacs.002", "ACSC")
-        emit("camt.054", "BOOK")
+        emit("pacs.002", "ACSC", t=total if anchored else None)
+        emit("camt.054", "BOOK", t=total if anchored else None)
 
     # --- originator recall overlay (camt.056 request -> camt.029 resolution) ---- #
     # If the recall is accepted (CNCL) but funds were already credited, funds come back via a
     # pacs.004 return. Set on the payment by the generator; see synth_india_rails.
     if cancel_requested:
-        emit("camt.056", "", "CUST")
-        emit("camt.029", cancel_status if cancel_status != "none" else "RJCR")
+        base = total if anchored else None
+        emit("camt.056", "", "CUST", t=base + RECALL_LAG_MIN if anchored else None)
+        emit("camt.029", cancel_status if cancel_status != "none" else "RJCR",
+             t=base + 2 * RECALL_LAG_MIN if anchored else None)
         if cancel_status == "CNCL" and status in ("STP", "REPAIRED"):
-            emit("pacs.004", "", return_reason or "CUST", reverse=True)
-    return _stamp_offsets(out, total)
+            emit("pacs.004", "", return_reason or "CUST", reverse=True,
+                 t=base + 3 * RECALL_LAG_MIN if anchored else None)
+    return _finalize_offsets(out, total)
 
 
-def _stamp_offsets(out, total):
-    """Spread relative timestamps across [0, total] min: pain.001 @ 0, last message @ total."""
-    n = len(out)
-    for i, row in enumerate(out):
-        row["t_offset_min"] = round(total * i / (n - 1), 3) if n > 1 else 0.0
+def _finalize_offsets(out, total):
+    """Anchored rows keep their event-derived times; legacy rows (t=None) get the old linear
+    spread across [0, total] so 2-tuple callers keep working."""
+    if any(r["t_offset_min"] is None for r in out):
+        n = len(out)
+        for i, row in enumerate(out):
+            row["t_offset_min"] = round(total * i / (n - 1), 3) if n > 1 else 0.0
     return out

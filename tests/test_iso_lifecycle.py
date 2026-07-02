@@ -61,6 +61,32 @@ def test_timestamps_start_zero_end_total_monotonic():
     assert all(b >= a for a, b in zip(offs, offs[1:]))
 
 
+def test_event_anchored_timestamps_and_post_settlement_legs():
+    row = dict(_row(), time_to_settle_min=20.0)
+    ev = [("validation", "none", 1.0), ("aml", "none", 5.0),
+          ("settlement", "none", 18.0), ("credit", "none", 20.0)]
+    t = {m["msg_type"]: m["t_offset_min"] for m in lifecycle_messages(row, "STP", ev)}
+    assert t["pain.001"] == 0.0
+    assert t["pain.002"] == 5.0 and t["pacs.008"] == 5.0    # acceptance = last pre-submission
+    assert t["pacs.002"] == 20.0 and t["camt.054"] == 20.0  # settlement completion
+    # exception legs land AFTER settlement, in order
+    crow = dict(row, cancel_requested=1, cancel_status="CNCL", return_reason="CUST")
+    cm = {m["msg_type"]: m["t_offset_min"] for m in lifecycle_messages(crow, "STP", ev)}
+    assert cm["camt.056"] > 20.0
+    assert cm["pacs.004"] > cm["camt.029"] > cm["camt.056"]
+
+
+def test_msg_direction_and_visibility_perspective():
+    outm = {m["msg_type"]: m["msg_direction"]
+            for m in lifecycle_messages(_row(), "STP", [("credit", "none")])}
+    assert outm["pain.001"] == "IN" and outm["pacs.008"] == "OUT" and outm["camt.054"] == "IN"
+    irow = dict(_row(), direction="inward")
+    inm = {m["msg_type"]: (m["msg_direction"], m["visible"])
+           for m in lifecycle_messages(irow, "STP", [("credit", "none")])}
+    assert inm["pain.001"] == (None, 0)                      # remote debtor bank's leg
+    assert inm["pacs.008"] == ("IN", 1) and inm["pacs.002"] == ("OUT", 1)
+
+
 def test_cover_method_emits_pacs009_after_pacs008():
     cov = dict(_row(), SttlmMtd="COVE")
     types = [m["msg_type"] for m in lifecycle_messages(cov, "STP", [("credit", "none")])]

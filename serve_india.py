@@ -72,7 +72,14 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
 # --------------------------------------------------------------------------- #
 
 class IndiaScorer:
-    """Loaded India model: predict rail / status / ETA / exception risks for payment rows."""
+    """Loaded India model: predict rail / status / ETA / exception risks for payment rows.
+
+    INTAKE-GRAIN ONLY: these probes were fit on embeddings of COMPLETE payment rows. Do NOT
+    feed message-prefix pools or masked partial views through them - that embedding space is
+    out-of-distribution for these probes and the numbers would be quietly wrong. The streaming
+    / partial-view heads live in eval code (run_impute) and are not persisted in this bundle;
+    productizing in-flight scoring means saving those heads in save_india_model too.
+    """
 
     def __init__(self, encoder, vocabs, probes, device):
         self.encoder = encoder

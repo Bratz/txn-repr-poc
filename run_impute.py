@@ -102,6 +102,8 @@ def streaming_outcome(encoder, vocabs, msg, device):
     from sklearn.metrics import average_precision_score
     from run_seq import embed_all_rows
 
+    if "msg_direction" in msg.columns:       # engine perspective: only messages our bank sees
+        msg = msg[msg["msg_direction"].notna()]
     msg = msg.reset_index(drop=True)
     em = embed_all_rows(encoder, vocabs.encode(msg), len(msg), device).cpu().numpy()
     groups = {}

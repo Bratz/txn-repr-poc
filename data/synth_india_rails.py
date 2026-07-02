@@ -432,7 +432,7 @@ def build_messages(pay_df, evt_df) -> pd.DataFrame:
     signature is untouched. The halting cause per payment comes from its event log."""
     from data.iso_lifecycle import lifecycle_messages
 
-    ev_by_pid = {pid: list(zip(g["step"], g["excode"]))
+    ev_by_pid = {pid: list(zip(g["step"], g["excode"], g["t_min"]))
                  for pid, g in evt_df.groupby("payment_id", sort=False)}
     rows = []
     for pr in pay_df.to_dict("records"):

@@ -185,6 +185,24 @@ def test_cancellation_and_return_labels_consistent_with_messages():
     assert has("pacs.008")[pay["cancel_requested"].astype(bool)].all()
 
 
+def test_message_flow_columns_and_anchored_times():
+    from data.synth_india_rails import build_messages
+    pay, evt, _ = _small()
+    msg = build_messages(pay, evt)
+    assert {"msg_direction", "visible", "t_offset_min"} <= set(msg.columns)
+    # inward payments: the pain.* legs live at the remote debtor bank -> invisible to us
+    pain_in = msg[(msg.direction == "inward") & msg.msg_type.str.startswith("pain")]
+    assert len(pain_in) and (pain_in["visible"] == 0).all()
+    # event-anchored: booking lands exactly at the workflow's settle time
+    booked = msg[msg.msg_type == "camt.054"].merge(
+        pay[["payment_id", "time_to_settle_min"]], on="payment_id")
+    assert (booked["t_offset_min"] == booked["time_to_settle_min"].round(3)).all()
+    # exception legs land strictly after settlement
+    late = msg[msg.msg_type.isin(["camt.056", "camt.029"])].merge(
+        pay[["payment_id", "time_to_settle_min"]], on="payment_id")
+    assert len(late) and (late["t_offset_min"] > late["time_to_settle_min"]).all()
+
+
 def test_swift_cover_method_emits_pacs009_alongside_pacs008():
     from data.synth_india_rails import build_messages
     pay, evt, _ = _small()

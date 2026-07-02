@@ -35,6 +35,16 @@ def test_prefix_excludes_outcome_messages_and_keeps_order():
     assert by["E0"]["dt"][0] == 0.0                             # first gap is zero
 
 
+def test_engine_visibility_filter_drops_invisible_rows():
+    msg = _msg()
+    # simulate E1 as inward: its pain.* legs are not visible to our bank
+    msg["msg_direction"] = "IN"
+    msg.loc[(msg.end_to_end_id == "E1") & msg.msg_type.str.startswith("pain"),
+            "msg_direction"] = None
+    actors = {s["actor"] for s in message_prefix_sequences(msg, min_len=2)}
+    assert "E0" in actors and "E1" not in actors    # E1's visible prefix is 1 msg -> dropped
+
+
 def test_tracker_labels_from_pacs002_status():
     msg = _msg()
     seqs = message_prefix_sequences(msg, min_len=2)

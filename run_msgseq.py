@@ -9,10 +9,18 @@ from the prefix; we predict the pacs.002 tracker status from what precedes it.
 
 Honest expectation (measured, not assumed): a single payment's lifecycle prefix is short
 (2-3 messages) and near-fixed-order (pain.001 -> pacs.008 -> pacs.009), so the SEQUENCE carries
-little beyond the bag-of-messages -> the temporal lift over pooling should be ~0. Where the
-history encoder genuinely wins is LONG per-ENTITY histories with temporal correlation (see
-run_seq velocity/C3). Reproducing that for tracker outcomes needs the generator to correlate an
-account's successive payments (a future data change) - documented, not faked.
+little beyond the bag-of-messages -> the temporal lift over pooling should be ~0. NOTE the
+original null was ALSO confounded by linearly-interpolated message timestamps (dt was a pure
+function of total/chain-length); timestamps are now event-anchored (iso_lifecycle), so the dt
+features are meaningful and the null is re-testable. Where the history encoder genuinely wins
+is LONG per-ENTITY histories with temporal correlation (see run_seq velocity/C3). Reproducing
+that for tracker outcomes needs the generator to correlate an account's successive payments (a
+future data change) - documented, not faked.
+
+Engine realism: when the message table carries `msg_direction`/`visible` (iso_lifecycle
+MSG_FLOW), invisible rows are dropped first - an inward payment's prefix starts at pacs.008 IN
+(the pain.* legs live at the remote debtor's bank), so most inward payments have a 1-message
+prefix and fall below min_len. That is the real engine's information set, not a bug.
 
   python run_msgseq.py --smoke
 
@@ -45,6 +53,8 @@ def message_prefix_sequences(msg, keep=PREFIX_TYPES, min_len=2):
     """Per-UETR ordered sequence of the pre-outcome messages -> sequence dicts (collate-ready).
     dt is the minute-gap from the previous message; calendar features are zero (a single
     payment's messages are minutes apart, so intra-payment calendar carries no signal)."""
+    if "msg_direction" in msg.columns:       # engine perspective: only messages our bank sees
+        msg = msg[msg["msg_direction"].notna()]
     msg = msg.reset_index(drop=True)
     keep = set(keep)
     seq_col, type_col, off_col = msg["seq"].values, msg["msg_type"].values, msg["t_offset_min"].values
