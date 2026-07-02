@@ -14,7 +14,7 @@ from serve_india import load_india_model, save_india_model
 
 
 def test_save_load_predict_roundtrip(tmp_path):
-    pay, _, accs = build_dataset(IndiaConfig(num_accounts=150, num_payments=800, seed=23))
+    pay, evt, accs = build_dataset(IndiaConfig(num_accounts=150, num_payments=800, seed=23))
     schema = build_schema(pay, accs)
     cfg = EncoderConfig(hidden=64, layers=2, heads=2, ff_mult=2, epochs=1)
     torch.manual_seed(0)
@@ -24,6 +24,10 @@ def test_save_load_predict_roundtrip(tmp_path):
     e = embed_all_rows(enc, vocabs.encode(pay), len(pay), "cpu").cpu().numpy()
 
     probes = train_probes(e, pay, schema, np.arange(len(pay)))
+    from data.synth_india_rails import build_messages
+    from serve_india import fit_inflight_head
+    msg = build_messages(pay, evt)
+    probes["inflight_booked"] = fit_inflight_head(enc, vocabs, msg, "cpu", max_uetrs=300)
     quant = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                     pay[vocabs.ccy_col].to_numpy())
     save_india_model(tmp_path / "m", enc_cfg=cfg, vocabs=vocabs, quantizer=quant,
@@ -65,3 +69,18 @@ def test_save_load_predict_roundtrip(tmp_path):
     assert list(res["rail_pred"]) == list(ref["rail_pred"])
     assert list(res["status_pred"]) == list(ref["status_pred"])
     assert list(res["risk_pred"]) == list(ref["risk_pred"])
+
+    # in-flight streaming: the persisted head scores message prefixes per UETR.
+    some = msg[msg["payment_id"].isin(set(pay["payment_id"].head(30)))]
+    st = scorer.predict_stream(some)
+    assert {"end_to_end_id", "n_msgs", "last_msg_type", "booked_proba"} <= set(st.columns)
+    assert len(st) and st["booked_proba"].between(0, 1).all()
+    # a prefix WITHOUT outcome messages must also score (the real-time case)
+    pre = some[~some["msg_type"].isin(["pacs.002", "camt.054", "pacs.004"])]
+    st_pre = scorer.predict_stream(pre)
+    assert len(st_pre) and st_pre["booked_proba"].between(0, 1).all()
+    # an old-style bundle (no in-flight head) fails loudly, not silently
+    import pytest
+    bare = {k: v for k, v in probes.items() if k != "inflight_booked"}
+    with pytest.raises(SystemExit):
+        IndiaScorer(enc, vocabs, bare, "cpu").predict_stream(some)

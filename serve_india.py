@@ -8,11 +8,15 @@ arrive via load_state_dict; the quantizer grids and column vocabs are persisted 
 
 Bundle (a directory):
   encoder.pt     torch bundle - enc_cfg, schema buckets, vocabs, quantizer, encoder_state
-  probes.joblib  the sklearn intake probes (rail / status / eta / per-exception)
+  probes.joblib  the sklearn intake probes (rail / status / eta / per-exception) + the
+                 in-flight 'inflight_booked' head (fit on message-prefix POOLS - see
+                 fit_inflight_head; predict_stream is its only valid consumer)
   meta.json      human-readable summary
 
   python run_india.py --save model_india           # train + persist
   python serve_india.py --model-dir model_india --input data/india_rails_payments.parquet
+  python serve_india.py --model-dir model_india --input data/test_input_messages_100.csv
+                                                   # message rows -> streaming booked-proba
 """
 
 from __future__ import annotations
@@ -31,6 +35,56 @@ from run_seq import embed_all_rows
 
 _ENC = "encoder.pt"
 _PROBES = "probes.joblib"
+
+
+# --------------------------------------------------------------------------- #
+# In-flight (message-prefix) scoring - ONE pooling code path for fit and serve
+# --------------------------------------------------------------------------- #
+
+def _visible_sorted(msg):
+    """Engine perspective: keep only messages our bank sees, in lifecycle order."""
+    if "msg_direction" in msg.columns:
+        msg = msg[msg["msg_direction"].notna()]
+    elif "visible" in msg.columns:
+        msg = msg[msg["visible"] == 1]
+    return msg.sort_values(["end_to_end_id", "seq"]).reset_index(drop=True)
+
+
+def _embed_messages(encoder, vocabs, msg, device):
+    """Embed message rows WITHOUT the intake drift warning - sparse UNK columns are the
+    designed shape of a lifecycle message, not vocab drift."""
+    return embed_all_rows(encoder, vocabs.encode(msg), len(msg), device).cpu().numpy()
+
+
+def fit_inflight_head(encoder, vocabs, msg, device, max_uetrs=4000, log=print):
+    """Fit the streaming 'will it be booked?' head on message-prefix pools.
+
+    Trains on ALL visible prefixes (k=1..n) per UETR, so the served probability is valid at
+    any lifecycle state - including snapping toward 1/0 once an outcome message (pacs.002 /
+    camt.054) is in the prefix. Pooling here is the SAME operation predict_stream applies
+    (mean of the frozen per-message embeddings seen so far) - no train/serve skew.
+
+    ponytail: capped at max_uetrs payments (one logistic head does not need 100k prefixes and
+    full-corpus embedding is minutes of CPU); raise the cap if the head ever looks data-bound.
+    """
+    from sklearn.linear_model import LogisticRegression
+    msg = _visible_sorted(msg)
+    keep = msg["end_to_end_id"].drop_duplicates().head(max_uetrs)
+    msg = msg[msg["end_to_end_id"].isin(set(keep))].reset_index(drop=True)
+    e = _embed_messages(encoder, vocabs, msg, device)
+    booked = msg.groupby("end_to_end_id")["msg_type"].agg(lambda s: int("camt.054" in set(s)))
+    X, y = [], []
+    for u, g in msg.groupby("end_to_end_id", sort=False):
+        idx = g.index.to_numpy()
+        csum = np.cumsum(e[idx], axis=0)
+        for k in range(1, len(idx) + 1):
+            X.append(csum[k - 1] / k)
+            y.append(int(booked[u]))
+    X, y = np.asarray(X), np.asarray(y)
+    head = LogisticRegression(max_iter=1000, class_weight="balanced").fit(X, y)
+    log(f"[inflight] booked head fit on {len(y):,} prefixes from {len(keep):,} payments "
+        f"(prevalence {y.mean():.2f})")
+    return head
 
 
 # --------------------------------------------------------------------------- #
@@ -62,6 +116,7 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
         "statuses": list(probes["status"].classes_),
         "exceptions": list(probes["exc"].keys()),
         "tasks": list(probes.get("tasks", {})),
+        "inflight": "inflight_booked" in probes,
         "hidden": enc_cfg.hidden,
     }, indent=2))
     return save_dir
@@ -74,11 +129,12 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
 class IndiaScorer:
     """Loaded India model: predict rail / status / ETA / exception risks for payment rows.
 
-    INTAKE-GRAIN ONLY: these probes were fit on embeddings of COMPLETE payment rows. Do NOT
-    feed message-prefix pools or masked partial views through them - that embedding space is
-    out-of-distribution for these probes and the numbers would be quietly wrong. The streaming
-    / partial-view heads live in eval code (run_impute) and are not persisted in this bundle;
-    productizing in-flight scoring means saving those heads in save_india_model too.
+    Two grains, two entry points - do not cross them:
+      * predict(df)         INTAKE grain: complete payment rows. Its probes were fit on
+                            complete-row embeddings; message-prefix pools are OOD for them.
+      * predict_stream(msg) IN-FLIGHT grain: engine-visible message rows per UETR. Uses the
+                            'inflight_booked' head, fit on the same prefix-pool operation
+                            (fit_inflight_head) - the only valid consumer of pooled prefixes.
     """
 
     def __init__(self, encoder, vocabs, probes, device):
@@ -146,6 +202,33 @@ class IndiaScorer:
         out["top_exception_risks"] = topk
         return out.reset_index(drop=True)
 
+    def predict_stream(self, msg_df):
+        """Score message prefixes per UETR: P(booked | messages seen so far).
+
+        Input: engine-visible message rows (build_messages output / the stream CSV) - any
+        subset of a payment's lifecycle counts as 'seen so far'. Returns one row per UETR:
+        n_msgs, last_msg_type, booked_proba. Requires a bundle with the 'inflight_booked'
+        head (run_india --save on this revision or later).
+        """
+        import pandas as pd
+        head = self.probes.get("inflight_booked")
+        if head is None:
+            raise SystemExit("this bundle has no in-flight head - retrain with "
+                             "`run_india.py --save` to add probes['inflight_booked']")
+        msg = _visible_sorted(msg_df)
+        if not len(msg):
+            return pd.DataFrame(columns=["end_to_end_id", "n_msgs", "last_msg_type",
+                                         "booked_proba"])
+        e = _embed_messages(self.encoder, self.vocabs, msg, self.device)
+        rows = []
+        for u, g in msg.groupby("end_to_end_id", sort=False):
+            idx = g.index.to_numpy()
+            pool = e[idx].mean(0, keepdims=True)         # same op fit_inflight_head trained on
+            rows.append({"end_to_end_id": u, "n_msgs": int(len(idx)),
+                         "last_msg_type": g["msg_type"].iloc[-1],
+                         "booked_proba": round(float(head.predict_proba(pool)[0, 1]), 4)})
+        return pd.DataFrame(rows)
+
 
 def load_india_model(save_dir, device=None) -> IndiaScorer:
     import joblib
@@ -202,10 +285,16 @@ def main():
         df = pd.read_csv(p)
     if args.limit:
         df = df.head(args.limit)
-    res = scorer.predict(df)
-    res.to_csv(args.out, index=False)
-    print(f"predicted {len(res):,} payments -> {args.out}")
-    print(f"rail pred dist: {res['rail_pred'].value_counts().to_dict()}")
+    if "msg_type" in df.columns:                         # message stream -> in-flight scoring
+        res = scorer.predict_stream(df)
+        res.to_csv(args.out, index=False)
+        print(f"scored {len(res):,} in-flight payments (streams) -> {args.out}")
+        print(f"booked_proba mean {res['booked_proba'].mean():.3f}")
+    else:
+        res = scorer.predict(df)
+        res.to_csv(args.out, index=False)
+        print(f"predicted {len(res):,} payments -> {args.out}")
+        print(f"rail pred dist: {res['rail_pred'].value_counts().to_dict()}")
 
 
 if __name__ == "__main__":

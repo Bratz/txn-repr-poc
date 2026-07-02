@@ -196,6 +196,12 @@ predictions; only the **TFM track** is model work. Ordered P0→P2 within each.
   `f(x)`; beats the mean baseline even at smoke (MAE 145 vs 179) since charges is bps-of-amount and
   the encoder sees the amount. `fx_rate` is deliberately NOT a head — it is market noise.
 - Already shipped: STP@pain.001 (A) · reject-reason (B) · ETA (C) · streaming booked (D).
+- ✅ **In-flight scoring PRODUCTIZED**: `fit_inflight_head` trains the streaming booked head on
+  message-prefix pools (all k, train-split payments only) with the SAME pooling op
+  `IndiaScorer.predict_stream` applies at serve time (no train/serve skew); persisted as
+  `probes["inflight_booked"]` in the bundle (`meta.inflight`), old bundles fail loudly. CLI
+  auto-routes message-stream inputs (`msg_type` column) to streaming. Verified on the held-out
+  stream CSV: P(booked) discriminates pre-outcome and sharpens as messages arrive.
 
 ### Track R — Rule / Lookup / Template (delisted from ML — build once, deterministic)
 - **P0 · Geo-Cover (Dom/Intl/SEPA), ON-US/OFF-US, duplicate flag** (#11–13): generator/serve rules —
