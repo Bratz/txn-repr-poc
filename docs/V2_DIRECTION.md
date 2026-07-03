@@ -27,17 +27,19 @@ the same gap multiset and amount distribution, so every order-invariant aggregat
 only a model that reads the ordered, timed sequence can separate them. On that data, the smoke
 run gives (held-out accounts, prevalence ~0.44):
 
-| Claim | Measured | Threshold | Verdict |
-|---|---|---|---|
-| C3 temporal lift (sequence vs order-blind pooled) | +27.7 pp (0.79 vs 0.51 PR-AUC) | `>= +10 pp` | **pass** |
-| C4 held-out gen. (sequence vs CatBoost on aggregates) | +31.2 pp (0.79 vs 0.48 PR-AUC) | `>= +5 pp` | **pass** |
-| C5 LLM necessity (Option A probe vs Option B LLM) | A 0.79 vs B 0.56 | drop if A within 2pp | **drop LLM** |
+| Claim | Smoke (MockLLM, tiny enc) | FULL (25M enc, 40k rows) | Threshold | Verdict |
+|---|---|---|---|---|
+| C3 temporal lift (sequence vs order-blind pooled) | +27.7 pp (0.79 vs 0.51) | **+50.1 pp (0.963 vs 0.462)** | `>= +10 pp` | **pass** |
+| C4 held-out gen. (sequence vs CatBoost on aggregates) | +31.2 pp (0.79 vs 0.48) | **+48.3 pp (0.963 vs 0.480)** | `>= +5 pp` | **pass** |
+| Velocity burst (time-aware vs order-blind) | +44.4 pp | **+64.7 pp (0.852 vs 0.205)** | — | timing-only signal |
+| C5 LLM necessity (Option A probe vs Option B LLM) | A 0.79 vs B 0.56 (**MockLLM**) | **PENDING** — real-Phi run OOMs on the 16GB dev box (fp32 AND bf16; needs ~4-6GB free); retry armed | drop if B within 2pp of A | mock says **drop LLM** (−13 pp); not yet Phi-verified |
 
 C4 is the first result in the project where the learned representation beats the gradient-boosted
 baseline - because the signal is genuinely temporal and the aggregates are matched, so the tree
-sits at chance. Caveats: these are smoke numbers (tiny encoder, few epochs, **MockLLM for C5**),
-so they validate the experimental design and pipeline, not a headline claim - a full run (real
-Phi for C5, paper-scale encoder) is what turns them into one. The regime is synthetic
+sits at chance. Full-run numbers (results_seq_full.json, seeded/reproducible; claim inputs
+preserved in data/_c5_reps.npz) are substantially STRONGER than smoke. Remaining caveats: C5 is
+mock-verified only until the real-Phi Option B completes (transformers pinned to 4.44.2 — 5.x
+segfaults Phi CPU forwards; the load itself needs a freer-memory window). The regime is synthetic
 order-structure; real behavioural data is the next wall.
 
 ---

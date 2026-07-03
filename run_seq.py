@@ -255,12 +255,31 @@ def main():
         # representations on the SAME held-out actors
         h_tr = encode_histories(hist, e_all, train_seqs, device, static_all)
         h_ev = encode_histories(hist, e_all, eval_seqs, device, static_all)
-        seq_pr = probe_pr(h_tr.cpu().numpy(), y_tr, h_ev.cpu().numpy(), y_ev)        # Option A
-        pool_pr = probe_pr(pooled_features(e_all, train_seqs), y_tr,
-                           pooled_features(e_all, eval_seqs), y_ev)                  # C3 base
+        hn_tr, hn_ev = h_tr.cpu().numpy(), h_ev.cpu().numpy()
+        pv_tr = pooled_features(e_all, train_seqs)
+        pv_ev = pooled_features(e_all, eval_seqs)
+        from data.sequence_assembly import velocity_labels
+        yv_tr, yv_ev = velocity_labels(train_seqs), velocity_labels(eval_seqs)
+        seq_pr = probe_pr(hn_tr, y_tr, hn_ev, y_ev)                                  # Option A
+        pool_pr = probe_pr(pv_tr, y_tr, pv_ev, y_ev)                                 # C3 base
         cb_pr = catboost_pr(agg_features(df, train_seqs), y_tr,
                             agg_features(df, eval_seqs), y_ev,
                             iters=50 if args.smoke else 200)                          # C4 base
+
+        # Crash insurance: fp32 Phi-1.5 (~5.7 GB) has OOM-killed full CPU runs at the LLM
+        # load below. Everything the remaining claims need is dumped here so a fresh
+        # process can finish C5 + velocity without repeating the multi-hour pipeline, and
+        # the big tensors are freed before the LLM loads.
+        np.savez(ROOT / "data" / "_c5_reps.npz",
+                 h_tr=hn_tr, h_ev=hn_ev, y_tr=y_tr, y_ev=y_ev,
+                 pv_tr=pv_tr, pv_ev=pv_ev, yv_tr=yv_tr, yv_ev=yv_ev,
+                 seq_pr=seq_pr, pool_pr=pool_pr, cb_pr=cb_pr, D=D)
+        print(f"[claims] inputs dumped -> data/_c5_reps.npz")
+        import gc
+        del full, e_all, targets_all
+        static_all = None
+        gc.collect()
+
         from decoder.multimodal_decoder import MockLLM
         llm = (MockLLM(vocab_size=64, hidden=64, num_layers=2, num_heads=4).to(device)
                if args.smoke else None)
@@ -291,12 +310,9 @@ def main():
               f"{'DROP LLM' if c['C5_drop_llm'] else 'keep LLM'}")
 
         # --- velocity head: single-entity inter-arrival burst (timing-only signal) ----- #
-        from data.sequence_assembly import velocity_labels
-        yv_tr, yv_ev = velocity_labels(train_seqs), velocity_labels(eval_seqs)
         if len(set(yv_tr.tolist())) > 1 and len(set(yv_ev.tolist())) > 1:
-            v_seq = probe_pr(h_tr.cpu().numpy(), yv_tr, h_ev.cpu().numpy(), yv_ev)   # time-aware
-            v_pool = probe_pr(pooled_features(e_all, train_seqs), yv_tr,
-                              pooled_features(e_all, eval_seqs), yv_ev)              # order-blind
+            v_seq = probe_pr(hn_tr, yv_tr, hn_ev, yv_ev)                             # time-aware
+            v_pool = probe_pr(pv_tr, yv_tr, pv_ev, yv_ev)                            # order-blind
             results["velocity"] = {"pr_auc_timeaware": v_seq, "pr_auc_pooled": v_pool,
                                    "lift_pp": (v_seq - v_pool) * 100,
                                    "prevalence": float(yv_ev.mean())}
