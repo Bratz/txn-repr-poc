@@ -173,7 +173,8 @@ story.append(Paragraph(
     "CatBoost on hand-built aggregates by 41.3 points (C4) on a regime-change task whose "
     "order-invariant statistics are matched across classes. Feeding the same history "
     "representation through a frozen Phi-1.5 with 7.6M trainable adapter parameters buys "
-    "1.3 points over a linear probe (C5) - under our 2-point bar, so serving drops the LLM. "
+    "1.3 points over a linear probe (C5) - so the LLM is not required for fixed-menu "
+    "accuracy, though it remains the serving interface for reasons C5 does not measure. "
     "We then extend the corpus to a nine-message ISO 20022 lifecycle (pain.001 through "
     "camt.056/pacs.004) and report, wins and nulls alike: settlement-time regression beats "
     "its naive baseline at initiation (MAE 172 vs 234 minutes), in-flight outcome scoring "
@@ -331,8 +332,8 @@ cap("Figure 1: the frozen-encoder, frozen-LLM decoder with pretrained adapters, 
     "trainable trio - the adapter Phi projecting f(x) into the LLM's embedding space, "
     "the task vector psi, and the soft prompt phi. The frozen LLM reads the interleaved "
     "sequence as inputs_embeds and its next-word distribution, restricted to the answer "
-    "tokens, is the prediction. PULSE serves Option A (a linear probe); this Option B "
-    "path exists to measure C5, which retired it.")
+    "tokens, is the prediction. This decoder is PULSE's serving interface for the "
+    "classification menu (Section 7); C5 measures what it costs against a probe.")
 body("Not every question reaches the model. Rail caps and floors, assigned reference "
      "values, identifier lookups, and duplicate checks are answered by guards and "
      "templates that are exact by construction; we delisted those tasks from the model's "
@@ -391,19 +392,22 @@ body("C2b failed against our own bar. The adapter learns real signal - 0.210 PR-
      "encoder earns its keep where trees cannot follow - order, timing, partial "
      "information, and fusion across sources - which is precisely where Sections 5.1 "
      "and 6 place it.")
-h3("5.3&nbsp;&nbsp;The LLM verdict")
-body("C5 asks whether the frozen LLM belongs in the serving path. On regime "
-     "classification from the same frozen history vector, Option B (Phi-1.5 plus "
-     "adapters) reaches 0.932 against the probe's 0.919. The gap is real and it is "
-     "small: 1.3 points, under the 2-point bar we set in advance, purchased with 7.6M "
-     "trained parameters and a 1.3B-parameter forward pass per prediction. An earlier "
-     "mock-LLM control had suggested the LLM subtracts 13 points; the real model "
-     "corrects the sign but not the decision. Serving therefore uses linear probes and "
-     "isotonic calibration on the frozen representations, and nothing in the deployed "
-     "path executes an LLM. We note the untested cases plainly: tasks that emit text, "
-     "few-shot task switching, and instruction-conditioned multi-task heads are the "
-     "settings where the LLM could still earn its cost, and none of them is measured "
-     "here.")
+h3("5.3&nbsp;&nbsp;The LLM verdict - and its limits")
+body("C5 asks a narrow question: does the frozen LLM add accuracy on one fixed task? "
+     "On regime classification from the same frozen history vector, Option B (Phi-1.5 "
+     "plus adapters) reaches 0.932 against the probe's 0.919 - a real but small gap of "
+     "1.3 points, under the 2-point bar we set in advance, purchased with 7.6M trained "
+     "parameters and a 1.3B-parameter forward pass per prediction. An earlier mock-LLM "
+     "control had suggested the LLM subtracts 13 points; the real model corrects the "
+     "sign but not the decision. We state the scope plainly, because we initially "
+     "overread this result ourselves: C5 is our question, not the source paper's. "
+     "Their claim for the decoder is the interface - one frozen LLM answers every "
+     "task through instructions, a new question costs an instruction string plus a "
+     "tiny task vector, records interleave for multi-record reasoning, and the output "
+     "space is language. A linear probe tests none of that. C5 therefore licenses "
+     "exactly one conclusion: the LLM is not required for fixed-menu accuracy. It "
+     "does not license removing the decoder, and Section 7 describes the serving "
+     "architecture that keeps it.")
 
 # ====================================================== 6 LIFECYCLE RESULTS
 h2("6&nbsp;&nbsp;The lifecycle extension: wins and nulls")
@@ -460,20 +464,31 @@ body("Two rows deserve prose. The account-takeover result is the multi-source ar
 
 # ====================================================== 7 SERVING
 h2("7&nbsp;&nbsp;Serving")
-body("The deployed artifact is the frozen encoder, the frozen history encoder, and a "
-     "set of linear heads with per-head isotonic calibration fitted on held-out "
-     "prefixes - roughly 260MB, CPU-servable. Scoring is stateless: the engine sends a "
-     "payment row, or a message prefix, or an account's recent history, and receives "
-     "calibrated probabilities plus a predicted-lifecycle object (settlement outcome "
-     "distribution, remaining ETA, cancel and return probabilities). Uncalibrated "
-     "heads had produced scores like 0.94 for a 3%-prevalence event; calibration "
-     "restored readability (the same head now emits 0.19). Explanations come from "
-     "column occlusion against the frozen encoder - occlude a field, re-embed, measure "
-     "the shift - which is faithful to the model by construction and costs about "
-     "twenty embeddings per explained row. Two operational caveats are measured rather "
-     "than suspected: brand-new accounts degrade routing confidence to near-uniform "
-     "(identity features carry most of the rail signal), and a bundle trained under "
-     "scikit-learn 1.9 requires a one-line attribute shim to load under 1.7.")
+body("An earlier revision of this system served every question from its own linear "
+     "head - roughly ten per-task probes plus calibrators on the frozen encoder. That "
+     "was a quiet departure from the source architecture: the paper's decoder makes a "
+     "new question cost an instruction string, while a head farm makes it cost a new "
+     "head, a refit, and a recalibration. We corrected it. The serving interface for "
+     "the classification menu (rail, status, risk, geography, expense, and settlement "
+     "time as a banded class) is now the paper's decoder itself: one frozen LLM plus "
+     "the trained adapter trio, instruction-conditioned exactly as in Figure 1, "
+     "answering with a softmax over answer tokens. The per-task classification probes "
+     "and their calibrators are not shipped in this configuration.")
+body("Two families of question stay on probes, as documented boundaries rather than "
+     "hidden ones. Regression - the ETA point estimate that feeds the liquidity "
+     "curve - has no mechanism in an answer-token decoder beyond banding, so the "
+     "banded class rides the decoder while the point estimate stays a Ridge head. "
+     "The rare-event probability-of-default heads (cancel, return, the sixteen "
+     "exception codes) and the sequence extensions (in-flight, velocity, forecasting) "
+     "are our additions, outside the paper's single-record scope, and keep their "
+     "calibrated probes. Scoring remains stateless throughout: the engine sends rows, "
+     "prefixes, or histories and holds all state. Two operational caveats are "
+     "measured rather than suspected: brand-new accounts degrade routing confidence "
+     "to near-uniform (identity features carry most of the rail signal), and a bundle "
+     "trained under scikit-learn 1.9 needs a one-line attribute shim to load under "
+     "1.7. A pre-registered follow-up (C6 in the project ledger) measures what "
+     "fidelity costs: the decoder's per-task answer quality against the retired "
+     "probes on the same held-out split, at full scale with the real Phi-1.5.")
 
 # ====================================================== 8 LIMITATIONS
 h2("8&nbsp;&nbsp;Limitations")
@@ -496,13 +511,15 @@ body("Everything here is synthetic, and the generators were written by the same 
 h2("9&nbsp;&nbsp;Conclusion")
 body("PULSE's frozen encoder does carry many payment decisions - provided one is honest "
      "about which ones. Where the signal is a rule over a complete row, a "
-     "gradient-boosted tree wins and should be shipped instead (C2b, routing, status). "
+     "gradient-boosted tree wins on accuracy (C2b, routing, status) and we report it. "
      "Where the signal is order, timing, partial information, or a second source the "
      "tree never sees, the frozen representation wins by margins of 38 to 60 PR-AUC "
-     "points (C3, C4, velocity, in-flight, fusion). The frozen LLM, the most "
-     "expensive component the source architecture allows, contributes 1.3 points and "
-     "was removed from serving (C5). The claims ledger, generators, and 197 tests "
-     "reproduce every number in this paper from two commands.")
+     "points (C3, C4, velocity, in-flight, fusion). The frozen LLM contributes 1.3 "
+     "accuracy points on a fixed task (C5) - and stays, because the source paper's "
+     "argument for it was never accuracy on a fixed task: it is the interface that "
+     "prices a new question at one instruction string, and PULSE serves it as such. "
+     "The claims ledger, generators, and 198 tests reproduce every number in this "
+     "paper from two commands.")
 
 # ====================================================== ANNEXURE A
 _annex = Path(__file__).resolve().parent / "annex_capture.json"

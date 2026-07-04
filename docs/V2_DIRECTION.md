@@ -40,9 +40,27 @@ sits at chance. FULL numbers are the canonical GPU run on the whole §7 corpus (
 4,803 held-out actors, prevalence 0.45; results_seq_full.json, seeded/reproducible). An earlier
 interim 40k-row CPU slice gave higher lifts (C3 +50.1, C4 +48.3, velocity +64.7) — smaller eval
 set, same conclusions; the full-corpus numbers supersede it. C5 is now measured with real Phi-1.5:
-the frozen LLM + adapters edges the linear probe by +1.3 pp, under the 2 pp bar — the probe keeps
-~98.6% of the LLM path's PR-AUC with none of its cost, so the LLM is dropped from serving. The
+the frozen LLM + adapters edges the linear probe by +1.3 pp, under the 2 pp bar. The
 regime is synthetic order-structure; real behavioural data is the next wall.
+
+### Correction (review, 2026-07-04): C5's scope, and the serving digression
+
+C5 answered OUR question (is the LLM needed for accuracy on ONE fixed task?), not the source
+paper's. The paper's claim for the frozen-LLM decoder is the INTERFACE: one decoder answers
+many tasks through instructions — a new question costs an instruction string plus a tiny ψ,
+not a new head + refit + recalibration — plus multi-record reasoning (Eq. 5) and text output.
+A linear probe tests none of that, and the serving layer had quietly swapped the paper's
+interface for a per-task head farm. Corrected: `run_india.py --paper-serving` now trains the
+paper-exact instruction decoder over the whole India classification menu (rail, status, risk,
+geography, expense, ETA band) and ships it INSTEAD of the classification probes
+(`IndiaScorer.ask` / `POST /score/ask`; `predict()` routes through it, so the API shape holds).
+ETA regression and rare-event PDs stay on probes — the decoder emits answer tokens, not
+numbers. C5's verdict is hereby narrowed to what it measured: the LLM is not required for
+FIXED-MENU accuracy; it is retained as the serving interface.
+
+| Claim | What it tests | Threshold | Status |
+|---|---|---|---|
+| **C6** instruction decoder vs the head farm, full scale (GPU, real Phi-1.5) | per-task answer quality of the ONE instruction-conditioned decoder across all 6 menu tasks vs the retired per-task probes on the same held-out split; params + wall-clock per added task | adopt decoder-only serving if macro answer quality is within 5 pp of the probes | **pre-registered — needs the GPU run** (`run_india.py --paper-serving --save model_india`, runbook F) |
 
 ---
 

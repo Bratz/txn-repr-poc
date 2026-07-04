@@ -59,6 +59,11 @@ class VelocityRequest(BaseModel):
     transactions: list[dict]       # an account's recent payment rows (>=2), engine-supplied
 
 
+class AskRequest(BaseModel):
+    payments: list[dict]
+    task: str | None = None        # one task name, or None for the whole menu
+
+
 def _clean(rec: dict) -> dict:
     """JSON-safe record: numpy scalars -> python, floats rounded."""
     out = {}
@@ -109,6 +114,26 @@ def score_intake(req: IntakeRequest):
         for r, drv in zip(recs, _scorer.explain(df)):
             r["drivers"] = drv
     return {"model": _meta.get("model_dir"), "results": recs}
+
+
+@app.post("/score/ask")
+def score_ask(req: AskRequest):
+    """Paper-exact scoring (Raman et al. Sec. 4): one frozen LLM + adapters answers each
+    task's instruction; the softmax over answer tokens is the returned distribution.
+    Requires a --paper-serving bundle (decoder.pt)."""
+    if not req.payments:
+        raise HTTPException(422, "provide `payments` rows")
+    if not _meta.get("paper_decoder"):
+        raise HTTPException(409, "this bundle has no instruction decoder - retrain with "
+                                 "`run_india.py --paper-serving --save <dir>`")
+    try:
+        res = _scorer.ask(pd.DataFrame(req.payments), task=req.task)
+    except SystemExit as e:
+        raise HTTPException(422, str(e))
+    except KeyError as e:
+        raise HTTPException(422, f"payment rows are missing a required feature column: {e}")
+    return {"model": _meta.get("model_dir"), "llm": _meta.get("decoder_llm"),
+            "results": res}
 
 
 @app.post("/forecast/next")

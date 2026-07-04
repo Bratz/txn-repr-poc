@@ -52,6 +52,11 @@ python -u run_msgseq.py --out results_msgseq_full.json
 
 # E. Refresh the servable bundle (intake + inflight + velocity + next heads, calibrated)
 python -u run_india.py --save model_india --out results_india.json
+
+# F. Paper-exact serving tier (C6): instruction-tune the frozen-Phi decoder over the
+#    whole classification menu and ship it INSTEAD of the classification probes.
+#    Compare per-task answer quality against run E's probes on the same split.
+python -u run_india.py --paper-serving --save model_india_paper --out results_india_paper.json
 ```
 
 ## 4. Copy back

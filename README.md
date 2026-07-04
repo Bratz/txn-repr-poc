@@ -15,8 +15,10 @@ The project has since grown around that frozen core — measured, never retuned:
 - **ISO 20022 lifecycle twin**: nine message types (pain.001 → pacs.008 →
   camt.054, recall/return legs), India rails (RTGS/NEFT/IMPS/SWIFT) —
   `docs/INDIA_RAILS.md`, `docs/CBPR_TWIN_GAP.md`.
-- **Serving**: calibrated intake / in-flight / velocity / forecast heads behind a
-  FastAPI (`serve_india.py`, `api_india.py`) — samples in `docs/API_SAMPLES.md`.
+- **Serving**: the paper-exact instruction decoder (one frozen LLM + adapters,
+  `run_india.py --paper-serving` → `POST /score/ask`) answers the classification
+  menu; calibrated in-flight / velocity / forecast heads cover the sequence
+  extensions (`serve_india.py`, `api_india.py`) — samples in `docs/API_SAMPLES.md`.
 - **Evidence deck**: `docs/txn_repr_evidence.pptx`.
 
 ## Architecture — and how Phi-1.5 is used

@@ -288,12 +288,95 @@ def fit_inflight_heads(encoder, vocabs, msg, pay, device, max_uetrs=4000, msg_ev
 # Save
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Paper-exact serving tier (Raman et al. Sec. 4): ONE frozen LLM + trainable
+# {Phi, psi, phi} answers the whole classification menu via instructions -
+# the interface the source paper mandates. A new question costs an instruction
+# string + a tiny psi, not a new head + refit + recalibration. Regression (ETA)
+# and the rare-event PDs stay on probes: the decoder emits answer tokens, not
+# numbers - a documented boundary, not a hidden one.
+# --------------------------------------------------------------------------- #
+
+_ETA_BAND_EDGES = (1, 15, 60, 240, 1440)
+
+
+def _eta_bands():
+    e = _ETA_BAND_EDGES
+    return ([f"<{e[0]}m"] + [f"{a}-{b}m" for a, b in zip(e[:-1], e[1:])] + [f">{e[-1]}m"])
+
+
+def india_task_menu(pay):
+    """The classification menu as source-paper Sec. 5-style task specs (from data,
+    never hard-coded label sets)."""
+    tasks = []
+    for name, col in (("rail", "rail"), ("status", "terminal_status"),
+                      ("risk", "risk_label"), ("geography", "geo_label"),
+                      ("expense", "expense_label")):
+        if col in pay.columns:
+            tasks.append({"name": name, "label_column": col,
+                          "label_values": sorted(pay[col].astype(str).unique())})
+    if "time_to_settle_min" in pay.columns:
+        tasks.append({"name": "eta_band", "label_column": "_eta_band",
+                      "label_values": _eta_bands()})
+    return tasks
+
+
+def _with_eta_band(pay):
+    if "time_to_settle_min" not in pay.columns:
+        return pay
+    pay = pay.copy()
+    idx = np.searchsorted(_ETA_BAND_EDGES, pay["time_to_settle_min"].to_numpy(float),
+                          side="right")
+    pay["_eta_band"] = np.array(_eta_bands())[idx]
+    return pay
+
+
+def fit_instruction_decoder(encoder, vocabs, pay, rows, device, smoke=False,
+                            epochs=1, llm_name="microsoft/phi-1_5", log=print):
+    """Instruction-tune {Phi, psi, phi} jointly over the India task menu against the
+    frozen encoder and a frozen LLM (MockLLM under smoke). Returns the persistable
+    spec: adapter weights + task registry (instruction ids, answer token ids)."""
+    from decoder.multimodal_decoder import (DecoderConfig, HFCausalLM, MockLLM,
+                                            MultimodalDecoder)
+    from run_gpu import _to_device, build_task_specs, train_multitask
+    pay = _with_eta_band(pay)
+    menu = india_task_menu(pay)
+    if smoke:
+        llm = MockLLM(vocab_size=64, hidden=encoder.D, num_layers=2, num_heads=4)
+    else:
+        if device == "cpu":
+            log("[decoder] WARNING: real Phi-1.5 instruction tuning on CPU is hours-slow "
+                "and memory-hungry; the runbook trains this tier on GPU.")
+        llm = HFCausalLM(llm_name)
+    llm = llm.to(device)
+    specs = build_task_specs({"tasks": menu}, llm, smoke, device)
+    dec = MultimodalDecoder(encoder, llm, DecoderConfig(
+        n_tasks=len(specs), max_records=1, phi_mode="prompt")).to(device)
+    tdf = pay.iloc[rows].reset_index(drop=True)
+    full = _to_device(vocabs.encode(tdf), device)
+    train_multitask(dec, specs, tdf, full, R=1, epochs=epochs,
+                    batch_size=32 if smoke else 64, device=device, log=log,
+                    label="paper decoder")
+    registry = [{"name": s["name"], "label_values": list(s["label_values"]),
+                 "task_id": int(s["task_id"]), "instr": s["instr"].tolist(),
+                 "answers": [int(a) for a in s["answers"]]} for s in specs]
+    adapters = {k: v for k, v in dec.state_dict().items()
+                if not k.startswith(("encoder.", "llm."))}
+    return {"state": adapters, "registry": registry, "n_tasks": len(specs),
+            "llm": "mock" if smoke else llm_name,
+            "mock_state": llm.state_dict() if smoke else None,
+            "mock_hidden": encoder.D if smoke else None}
+
+
 def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, probes,
-                     velocity=None):
-    """Persist the frozen encoder bundle + intake probes (+ the velocity hist encoder)."""
+                     velocity=None, paper_decoder=None):
+    """Persist the frozen encoder bundle + intake probes (+ the velocity hist encoder,
+    + the paper-exact instruction decoder when fitted)."""
     import joblib
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    if paper_decoder is not None:
+        torch.save(paper_decoder, save_dir / "decoder.pt")
     if velocity is not None:
         torch.save({k: velocity[k] for k in ("hcfg", "recon_fields", "state")},
                    save_dir / _HIST)
@@ -314,15 +397,22 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
         "encoder_state": encoder.state_dict(),
     }, save_dir / _ENC)
     joblib.dump(probes, save_dir / _PROBES)
+    _reg = {t["name"]: t["label_values"] for t in paper_decoder["registry"]} \
+        if paper_decoder else {}
     (save_dir / "meta.json").write_text(json.dumps({
-        "rails": list(probes["rail"].classes_),
-        "statuses": list(probes["status"].classes_),
+        "rails": (list(probes["rail"].classes_) if "rail" in probes
+                  else _reg.get("rail", [])),
+        "statuses": (list(probes["status"].classes_) if "status" in probes
+                     else _reg.get("status", [])),
         "exceptions": list(probes["exc"].keys()),
-        "tasks": list(probes.get("tasks", {})),
+        "tasks": (list(probes.get("tasks", {}))
+                  or [n for n in ("risk", "geography", "expense") if n in _reg]),
         "inflight": "inflight" in probes,
         "velocity": velocity is not None and velocity["head"] is not None,
         "next": "next" in probes,
         "calibrated": "exc_cal" in probes,
+        "paper_decoder": paper_decoder is not None,
+        "decoder_llm": paper_decoder["llm"] if paper_decoder else None,
         "hidden": enc_cfg.hidden,
     }, indent=2))
     return save_dir
@@ -343,13 +433,78 @@ class IndiaScorer:
                             (fit_inflight_head) - the only valid consumer of pooled prefixes.
     """
 
-    def __init__(self, encoder, vocabs, probes, device, hist=None, velocity_head=None):
+    def __init__(self, encoder, vocabs, probes, device, hist=None, velocity_head=None,
+                 decoder_spec=None):
         self.encoder = encoder
         self.vocabs = vocabs
         self.probes = probes
         self.device = device
         self.hist = hist                      # frozen v2 history encoder (velocity), optional
         self.velocity_head = velocity_head
+        self.decoder_spec = decoder_spec      # paper-exact instruction decoder (Sec. 4)
+        self._dec = None                      # built lazily (real LLM load is heavy)
+
+    def _build_decoder(self):
+        if self._dec is not None:
+            return self._dec
+        if self.decoder_spec is None:
+            raise SystemExit("this bundle has no instruction decoder - retrain with "
+                             "`run_india.py --paper-serving --save <dir>`")
+        from decoder.multimodal_decoder import (DecoderConfig, HFCausalLM, MockLLM,
+                                                MultimodalDecoder)
+        spec = self.decoder_spec
+        if spec["llm"] == "mock":
+            llm = MockLLM(vocab_size=64, hidden=spec["mock_hidden"], num_layers=2,
+                          num_heads=4)
+            llm.load_state_dict(spec["mock_state"])
+        else:
+            llm = HFCausalLM(spec["llm"])
+        llm = llm.to(self.device)
+        dec = MultimodalDecoder(self.encoder, llm, DecoderConfig(
+            n_tasks=spec["n_tasks"], max_records=1, phi_mode="prompt")).to(self.device)
+        dec.load_state_dict(spec["state"], strict=False)
+        dec.eval()
+        self._dec = dec
+        return dec
+
+    @torch.no_grad()
+    def _ask_probs(self, df):
+        """One frozen LLM, every task: {name: (label_values, (B, L) answer-token probs)}."""
+        from run_gpu import _to_device
+        dec = self._build_decoder()
+        batch = _to_device(self.vocabs.encode(df), self.device)
+        out = {}
+        for t in self.decoder_spec["registry"]:
+            tids = torch.full((len(df),), t["task_id"], dtype=torch.long,
+                              device=self.device)
+            instr = torch.tensor(t["instr"], device=self.device).unsqueeze(0).expand(
+                len(df), -1)
+            p = dec.predict_proba(batch, tids, instr, t["answers"]).cpu().numpy()
+            out[t["name"]] = (t["label_values"], p)
+        return out
+
+    def ask(self, df, task=None):
+        """Paper-exact scoring (Raman et al. Sec. 4): the frozen LLM answers each task's
+        instruction; the softmax over answer tokens is the distribution. New question =
+        new instruction + tiny psi - no new head, no refit, no recalibration."""
+        T = self._ask_probs(df)
+        if task is not None:
+            if task not in T:
+                raise SystemExit(f"unknown task {task!r}; menu: {sorted(T)}")
+            T = {task: T[task]}
+        rows = []
+        pids = df["payment_id"].tolist() if "payment_id" in df.columns else [None] * len(df)
+        for i in range(len(df)):
+            r = {"tasks": {}}
+            if pids[i] is not None:
+                r["payment_id"] = pids[i]
+            for name, (labels, p) in T.items():
+                j = int(p[i].argmax())
+                r["tasks"][name] = {"pred": labels[j], "conf": round(float(p[i, j]), 4),
+                                    "proba": {l: round(float(v), 4)
+                                              for l, v in zip(labels, p[i])}}
+            rows.append(r)
+        return rows
 
     @torch.no_grad()
     def _embed(self, df):
@@ -368,8 +523,15 @@ class IndiaScorer:
         import pandas as pd
         from data.rails import IDENTIFIER_TYPES, eligible_rails
         e = self._embed(df)
-        rail_p = self.probes["rail"].predict_proba(e).copy()
-        rail_cls = list(self.probes["rail"].classes_)
+        # paper-serving bundles carry no classification probes: the instruction decoder
+        # (one frozen LLM, Sec. 4) answers the menu; probes remain for ETA + rare-event PDs.
+        T = self._ask_probs(df) if "rail" not in self.probes else None
+        if T is None:
+            rail_p = self.probes["rail"].predict_proba(e).copy()
+            rail_cls = list(self.probes["rail"].classes_)
+        else:
+            rail_cls, rail_p = T["rail"]
+            rail_p = rail_p.copy()
 
         # Hybrid routing: the learned probe gives PREFERENCE, but a payment can only go on
         # an ELIGIBLE rail (cap/min/cross-border are hard rules the classifier doesn't know).
@@ -396,10 +558,20 @@ class IndiaScorer:
             out["payment_id"] = df["payment_id"].to_numpy()
         out["rail_pred"] = np.array(rail_cls)[rail_p.argmax(1)]
         out["rail_conf"] = rail_p.max(1).round(3)
-        out["status_pred"] = self.probes["status"].predict(e)
+        if T is None:
+            out["status_pred"] = self.probes["status"].predict(e)
+        else:
+            cls, p = T["status"]
+            out["status_pred"] = np.array(cls)[p.argmax(1)]
         out["eta_min_pred"] = np.clip(self.probes["eta"].predict(e), 0, None).round(1)
-        for tname, m in self.probes.get("tasks", {}).items():   # §5 heads (risk/geo/expense)
-            out[f"{tname}_pred"] = m.predict(e)
+        if T is None:                                           # §5 heads (risk/geo/expense)
+            for tname, m in self.probes.get("tasks", {}).items():
+                out[f"{tname}_pred"] = m.predict(e)
+        else:
+            for tname in ("risk", "geography", "expense"):
+                if tname in T:
+                    cls, p = T[tname]
+                    out[f"{tname}_pred"] = np.array(cls)[p.argmax(1)]
         exc_cal = self.probes.get("exc_cal", {})
         risks = {}
         for n, m in self.probes["exc"].items():
@@ -584,6 +756,10 @@ class IndiaScorer:
         report the drop in the predicted rail/risk probability and the ETA shift. ~n_cols
         extra forward passes per payment - cap the batch accordingly.
         """
+        if "rail" not in self.probes:
+            raise SystemExit("explain() occludes against the probe tier; a paper-serving "
+                             "bundle answers via the instruction decoder, where occlusion "
+                             "costs n_cols LLM forwards per row - not fitted here")
         import pandas as pd
         df = df.reset_index(drop=True)
         cols = (list(self.vocabs.high_card) + [self.vocabs.numerical_col]
@@ -665,8 +841,13 @@ def load_india_model(save_dir, device=None) -> IndiaScorer:
         hist.load_state_dict(hb["state"])
         hist.freeze()
         hist.to(device)
+    dec_spec = None
+    if (save_dir / "decoder.pt").exists():
+        dec_spec = torch.load(save_dir / "decoder.pt", map_location="cpu",
+                              weights_only=False)
     return IndiaScorer(encoder, vocabs, probes, device,
-                       hist=hist, velocity_head=probes.get("velocity"))
+                       hist=hist, velocity_head=probes.get("velocity"),
+                       decoder_spec=dec_spec)
 
 
 # --------------------------------------------------------------------------- #

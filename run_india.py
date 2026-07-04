@@ -328,6 +328,12 @@ def main():
     ap.add_argument("--demo", action="store_true", help="print per-payment forecasts vs actuals")
     ap.add_argument("--save", default=None, metavar="DIR",
                     help="persist the frozen encoder + intake probes to DIR for serve_india.py")
+    ap.add_argument("--paper-serving", action="store_true",
+                    help="serve the classification menu with the paper-exact instruction "
+                         "decoder (one frozen LLM + adapters, Sec. 4) and do NOT fit the "
+                         "per-task classification probes")
+    ap.add_argument("--decoder-epochs", type=int, default=1,
+                    help="instruction-tuning epochs for --paper-serving (paper pins 1)")
     ap.add_argument("--inflight-epochs", type=int, default=4)
     ap.add_argument("--out", default=str(ROOT / "results_india.json"))
     args = ap.parse_args()
@@ -374,6 +380,21 @@ def main():
         quantizer = AdaptiveQuantizer().fit(pay[vocabs.numerical_col].to_numpy(),
                                              pay[vocabs.ccy_col].to_numpy())
         probes = train_probes(e_pay, pay, schema, tr)        # deployable probes (train split)
+        paper_decoder = None
+        if args.paper_serving:
+            # Paper-exact serving (Raman et al. Sec. 4): the classification menu is
+            # answered by ONE frozen LLM + adapters via instructions - the head farm
+            # for those tasks is not shipped. ETA (regression) + exception PDs stay
+            # on probes: the decoder emits answer tokens, not numbers.
+            from serve_india import fit_instruction_decoder
+            paper_decoder = fit_instruction_decoder(
+                encoder, vocabs, pay, tr, device, smoke=args.smoke,
+                epochs=args.decoder_epochs)
+            for k in ("rail", "status", "tasks"):
+                probes.pop(k, None)
+            print(f"[save] paper-serving: instruction decoder over "
+                  f"{paper_decoder['n_tasks']} tasks (llm={paper_decoder['llm']}); "
+                  "classification probes removed")
         # in-flight lifecycle heads: fit on TRAIN-split prefixes, calibrate on EVAL-split.
         msg = build_messages(pay, evt)
         probes["inflight"] = fit_inflight_heads(
@@ -401,7 +422,8 @@ def main():
                 num_payments=800 if args.smoke else 12000, seed=29, cadence_frac=0.5))
             probes["next"] = fit_next_heads(encoder, vocabs, h, cad, device)
         path = save_india_model(args.save, enc_cfg=enc_cfg, vocabs=vocabs, quantizer=quantizer,
-                                encoder=encoder, schema=schema, probes=probes, velocity=vel)
+                                encoder=encoder, schema=schema, probes=probes, velocity=vel,
+                                paper_decoder=paper_decoder)
         print(f"[save] model -> {path}")
 
     inflight = run_inflight(evt, pay, tr_ids, ev_ids, schema, device, args.inflight_epochs, args.smoke)
