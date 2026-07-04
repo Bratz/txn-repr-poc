@@ -287,7 +287,7 @@ responseFlag/ErrCode (outcomes — banned from intake features) · **key** trace
 sessionId (entity/join keys) · **park** card block + deviceTrustLevel (another model's
 output — circularity) · **skip** the 16 extensibility placeholders.
 
-**Synthetic behaviour + measurement** (`run_origination.py`): a rare ATO episode (new device
+**Synthetic behaviour + measurement** (the origination-fusion block in `run_impute.py`): a rare ATO episode (new device
 + credential change + payee-add + login burst → drain payment) exists only in the origination
 context. Measured (held-out): ISO-view-only PR-AUC **0.03** (≈ prevalence — blind by
 construction) vs context/fused **1.00** (the synthetic pattern is deterministic, hence the

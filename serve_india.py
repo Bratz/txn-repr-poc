@@ -106,12 +106,9 @@ def fit_velocity(encoder, vocabs, pay, device, hist_epochs=2, burst_k=2,
     from sklearn.linear_model import LogisticRegression
     from dataclasses import asdict
     from data.sequence_assembly import assemble_sequences, velocity_labels
-    from encoder.history_encoder import HistoryConfig, HistoryEncoder
-    from encoder.history_encoder import pretrain as hist_pretrain
-    from run_seq import encode_histories
+    from run_seq import encode_histories, small_history_encoder
 
     e_all = torch.as_tensor(_embed_messages(encoder, vocabs, pay, device)).to(device)
-    D = int(e_all.shape[1])
     seqs = assemble_sequences(pay, actor_col="DbtrAcct_Id", max_len=64, min_len=2)
     if not seqs:
         log("[velocity] no multi-payment accounts - head skipped")
@@ -120,10 +117,8 @@ def fit_velocity(encoder, vocabs, pay, device, hist_epochs=2, burst_k=2,
                     "identifier_type": vocabs.core_size("identifier_type")}
     full = vocabs.encode(pay)
     targets_all = {n: full["core"][n] for n in recon_fields}
-    hcfg = HistoryConfig(hidden=D, layers=2, heads=4, ff_mult=2, epochs=hist_epochs)
-    hist = HistoryEncoder(recon_fields, hcfg).to(device)
-    hist_pretrain(hist, e_all, targets_all, seqs, hcfg, batch_size=64, log=log)
-    hist.freeze()
+    hist, hcfg = small_history_encoder(e_all, recon_fields, targets_all, seqs, device,
+                                       epochs=hist_epochs, log=log)
     h = encode_histories(hist, e_all, seqs, device).cpu().numpy()
     # ponytail: burst window relaxed vs run_seq's defaults (k=3/min 6) - India accounts
     # average ~5 payments, so the stricter window is all-zeros here. Still timing-only.
@@ -521,14 +516,14 @@ class IndiaScorer:
         df = txns_df.reset_index(drop=True)
         dates = pd.to_datetime(df["IntrBkSttlmDt"])
         e_all = torch.as_tensor(self._embed(df)).to(self.device)
-        from data.next_event import _seq
+        from data.next_event import seq_from_dates
         rows, seqs = [], []
         for actor, idx in df.groupby("DbtrAcct_Id").groups.items():
             pos = np.asarray(idx, dtype=np.int64)
             pos = pos[np.argsort(dates.values[pos])]
             if len(pos) < min_history:
                 continue
-            seqs.append(_seq(actor, pos[-64:], dates.values[pos[-64:]]))
+            seqs.append(seq_from_dates(actor, pos[-64:], dates.values[pos[-64:]]))
             vals, counts = np.unique(df["CdtrAcct_Id"].astype(str).to_numpy()[pos],
                                      return_counts=True)
             rows.append({"actor": actor, "n_history": int(len(pos)),

@@ -71,6 +71,21 @@ def frozen_embeddings(pay, schema, smoke, device, log=print, extra=None):
     return encoder, vocabs, e_pay, enc_cfg
 
 
+def small_history_encoder(e_all, recon_fields, targets_all, train_seqs, device,
+                          epochs=2, layers=2, heads=4, ff_mult=2, batch_size=64, log=print):
+    """Build + pretrain + FREEZE a small v2 history encoder over frozen per-row embeddings.
+    The shared constructor for the serving/eval paths that need a temporal encoder
+    (fit_velocity, run_next, run_msgseq). Returns (hist, hcfg)."""
+    from encoder.history_encoder import HistoryConfig, HistoryEncoder
+    from encoder.history_encoder import pretrain as hist_pretrain
+    hcfg = HistoryConfig(hidden=int(e_all.shape[1]), layers=layers, heads=heads,
+                         ff_mult=ff_mult, epochs=epochs)
+    hist = HistoryEncoder(recon_fields, hcfg).to(device)
+    hist_pretrain(hist, e_all, targets_all, train_seqs, hcfg, batch_size=batch_size, log=log)
+    hist.freeze()
+    return hist, hcfg
+
+
 def encode_histories(hist, e_all, seqs, device, static_all=None, batch_size=128):
     """Frozen entity representations h_USR for a list of sequences -> (N, D) torch."""
     from data.sequence_assembly import collate

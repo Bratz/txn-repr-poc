@@ -253,14 +253,19 @@ def main():
         c0 = _reg_mae(emb_pain[:], y_eta, tr_m, ev_m); c1 = _reg_mae(fused, y_eta, tr_m, ev_m)
         e0 = _bin(emb_pain[:], y_cancel, tr_m, ev_m); e1 = _bin(fused, y_cancel, tr_m, ev_m)
         f0 = _bin(emb_pain[:], y_return, tr_m, ev_m); f1 = _bin(fused, y_return, tr_m, ev_m)
+        y_ato = np.zeros(B); y_ato[cpos.to_numpy()] = ctx["atoFlag"].to_numpy()
+        g0 = _bin(emb_pain, y_ato, tr_m, ev_m); g1 = _bin(fused, y_ato, tr_m, ev_m)
         fusion = {"n_outward": int(m.sum()),
                   "stp_acc": [a0[0], a1[0]], "eta_mae": [c0[0], c1[0]],
-                  "cancel_pr_auc": [e0[0], e1[0]], "return_pr_auc": [f0[0], f1[0]]}
+                  "cancel_pr_auc": [e0[0], e1[0]], "return_pr_auc": [f0[0], f1[0]],
+                  "ato_pr_auc": [g0[0], g1[0]]}
         print("\norigination-context fusion @ pain.001 (outward; base -> fused):")
         print(f"  A STP acc     {a0[0]:.3f} -> {a1[0]:.3f}")
         print(f"  C ETA MAE     {c0[0]:.1f} -> {c1[0]:.1f} min")
         print(f"  E cancel PR   {e0[0]:.3f} -> {e1[0]:.3f}   (prev {e0[1]:.3f})")
         print(f"  F return PR   {f0[0]:.3f} -> {f1[0]:.3f}   (prev {f0[1]:.3f})")
+        print(f"  ATO PR        {g0[0]:.3f} -> {g1[0]:.3f}   (prev {g0[1]:.3f}; "
+              f"ISO view blind by construction)")
 
     stream = None
     mp = Path(args.messages)

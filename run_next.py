@@ -44,9 +44,6 @@ def _reg(h_tr, y_tr, h_ev, y_ev):
 
 
 def main():
-    from encoder.history_encoder import HistoryConfig, HistoryEncoder
-    from encoder.history_encoder import pretrain as hist_pretrain
-
     ap = argparse.ArgumentParser(description="next-event forecasting vs naive baselines")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--actor", default="DbtrAcct_Id",
@@ -80,16 +77,14 @@ def main():
           f"occurrence prevalence {lab['has_next'].mean():.3f})")
 
     # history encoder over per-example prefixes (reuses the frozen e_t)
+    from run_seq import small_history_encoder
     recon_fields = {"Ccy": vocabs.core_size("Ccy"),
                     "identifier_type": vocabs.core_size("identifier_type")}
     full = vocabs.encode(pay)
     targets_all = {n: full["core"][n] for n in recon_fields}
-    hcfg = HistoryConfig(hidden=int(e_all.shape[1]), layers=2, heads=4, ff_mult=2,
-                         epochs=args.hist_epochs)
-    hist = HistoryEncoder(recon_fields, hcfg).to(device)
     tr_seqs = [s for s, m in zip(seqs, tr_m) if m]
-    hist_pretrain(hist, e_all, targets_all, tr_seqs, hcfg, batch_size=64)
-    hist.freeze()
+    hist, _ = small_history_encoder(e_all, recon_fields, targets_all, tr_seqs, device,
+                                    epochs=args.hist_epochs)
     H = encode_histories(hist, e_all, seqs, device).cpu().numpy()
 
     y_occ = lab["has_next"].to_numpy()

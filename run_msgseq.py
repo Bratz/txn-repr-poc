@@ -95,9 +95,6 @@ def _probe(Xtr, ytr, Xev, yev):
 
 
 def main():
-    from encoder.history_encoder import HistoryConfig, HistoryEncoder
-    from encoder.history_encoder import pretrain as hist_pretrain
-
     ap = argparse.ArgumentParser(description="v2 message-lifecycle sequence -> gpi tracker outcome")
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--payments", default=str(ROOT / "data" / "india_rails_payments.parquet"))
@@ -145,13 +142,12 @@ def main():
         "Ccy": full_msg["core"]["Ccy"],
         "msg_type": torch.tensor([mt_index[t] for t in msg["msg_type"]], dtype=torch.long),
     }
-    hcfg = HistoryConfig(hidden=D, layers=2 if args.smoke else 4,
-                         heads=2 if args.smoke else 8, ff_mult=2 if args.smoke else 4,
-                         epochs=args.hist_epochs)
-    hist = HistoryEncoder(recon_fields, hcfg).to(device)
-    print(f"history encoder: {hist.num_trainable_parameters():,} trainable params")
-    hist_pretrain(hist, e_msg, targets_all, tr_seqs, hcfg, batch_size=64 if args.smoke else 128)
-    hist.freeze()
+    from run_seq import small_history_encoder
+    hist, hcfg = small_history_encoder(
+        e_msg, recon_fields, targets_all, tr_seqs, device, epochs=args.hist_epochs,
+        layers=2 if args.smoke else 4, heads=2 if args.smoke else 8,
+        ff_mult=2 if args.smoke else 4, batch_size=64 if args.smoke else 128)
+    print(f"history encoder: {sum(p.numel() for p in hist.parameters()):,} params")
 
     # sequence rep (h_USR) vs order-blind pooled mean -> 3-class tracker probe
     h_tr = encode_histories(hist, e_msg, tr_seqs, device).cpu().numpy()

@@ -26,7 +26,8 @@ Synthetic behaviour (documented choices):
   * an ATO (account-takeover) episode = new device + credential change + payee-add shortly
     before an outward payment (the classic change-then-drain pattern) -> atoFlag=1
   * the ATO signal lives ONLY in this source - by construction the ISO row cannot see it.
-    run_origination.py measures the fusion lift the origination context buys.
+    run_impute's origination-fusion block measures the lift the context buys
+    (incl. the ATO head - ISO view blind by construction).
 """
 
 from __future__ import annotations
@@ -84,7 +85,6 @@ ORIGINATION_ATTRS = {
 
 CHANNELS = ["IB", "MB"]
 DEVICE_OS = {"IB": ["Windows", "macOS"], "MB": ["Android", "iOS"]}
-EVENT_TYPES = ["login", "txn", "payee_add", "password_change", "mobile_change", "email_change"]
 
 
 def build_origination_context(pay: pd.DataFrame, seed: int = 23, ato_frac: float = 0.02,

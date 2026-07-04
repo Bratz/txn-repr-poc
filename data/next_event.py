@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 
-def _seq(actor, pos, ts):
+def seq_from_dates(actor, pos, ts):
     dt = np.diff(ts.astype("datetime64[D]").astype(np.int64), prepend=ts[0].astype(
         "datetime64[D]").astype(np.int64)).astype(np.float32)
     d = pd.DatetimeIndex(ts)
@@ -44,9 +44,9 @@ def windowed_examples(pay: pd.DataFrame, actor_col="DbtrAcct_Id",
     seqs, rows = [], []
 
     def _emit(actor, hist_pos, ts_hist, has_next, gap, n_amt, n_payee):
-        g = np.diff(ts_hist.astype("datetime64[D]").astype(np.int64)).astype(float)
         vals, counts = np.unique(payee[hist_pos], return_counts=True)
-        seqs.append(_seq(actor, hist_pos, ts_hist))
+        seqs.append(seq_from_dates(actor, hist_pos, ts_hist))
+        g = seqs[-1]["dt"][1:]
         rows.append({"actor": actor, "has_next": has_next, "gap_days": gap,
                      "next_amount": n_amt, "next_payee": n_payee,
                      "hist_gap_median": float(np.median(g)) if len(g) else np.nan,

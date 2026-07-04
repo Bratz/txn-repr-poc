@@ -19,11 +19,7 @@ data/column_schema_india.json
 *.ckpt
 party_store/
 # run outputs
-results.json
-results_seq.json
-results_twin.json
-results_india.json
-results_impute.json
+results*.json
 scored.csv
 # saved model checkpoints
 ckpt/
@@ -50,10 +46,4 @@ venv/
 # scratch run logs / generated test schema
 *.err
 data/_test100_schema.json
-results_impute_full.json
-results_impute_val.json
-results_msgseq.json
 *.npz
-results_seq_full.json
-results_origination.json
-results_next.json
