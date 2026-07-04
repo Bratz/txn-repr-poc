@@ -5,7 +5,11 @@ pyarrow>=14.0          # parquet output (falls back to CSV if absent)
 pyyaml>=6.0            # reads configs/default.yaml
 
 # Phase 2+ (encoder / decoder / eval)
-torch>=2.2             # Phase 2a+ (CPU wheel ok for POC)
-transformers>=4.40     # Phase 3 frozen Phi LLM (HFCausalLM; GPU run)
+torch>=2.2             # Phase 2a+ (CPU wheel ok for POC; CUDA wheel on GPU boxes)
+transformers>=4.40,<5  # frozen Phi-1.5 (HFCausalLM). 5.x SEGFAULTS the Phi CPU forward
+                       # (measured, exit 139); 4.44.2 verified on CPU and GPU paths.
 catboost>=1.2          # Phase 4 baseline
-scikit-learn>=1.4      # Phase 4 metrics
+scikit-learn>=1.4      # Phase 4 metrics + serving probes/calibrators
+
+# serving API (optional)
+# fastapi>=0.110 ; uvicorn>=0.29   # python -m uvicorn api_india:app
