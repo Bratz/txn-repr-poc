@@ -1,30 +1,30 @@
-"""Tests for the eFRM channel source (data/efrm_source.py)."""
+"""Tests for the pain.001 origination context (data/pain001_context.py)."""
 
 import numpy as np
 
-from data.efrm_source import CTX_FEATURES, EFRM_ATTRS, build_channel_events, ctx_matrix
+from data.pain001_context import CTX_FEATURES, ORIGINATION_ATTRS, build_origination_context, ctx_matrix
 from data.synth_india_rails import IndiaConfig, build_dataset
 
 
 def _ctx(n=4000):
     pay, _, _ = build_dataset(IndiaConfig(num_accounts=300, num_payments=n, seed=23))
-    return pay, *build_channel_events(pay, seed=7)
+    return pay, *build_origination_context(pay, seed=7)
 
 
 def test_registry_dispositions_are_sane():
     allowed = {"feature", "duplicate", "label", "key", "park", "skip"}
-    assert set(EFRM_ATTRS.values()) <= allowed
+    assert set(ORIGINATION_ATTRS.values()) <= allowed
     # outcomes are labels, never features (leakage rule)
     for a in ("responseFlag", "responseErrCode", "responseErrDesc"):
-        assert EFRM_ATTRS[a] == "label"
+        assert ORIGINATION_ATTRS[a] == "label"
     # trace/entity ids are keys, not content
     for a in ("transactionTraceId", "userId", "sessionId"):
-        assert EFRM_ATTRS[a] == "key"
+        assert ORIGINATION_ATTRS[a] == "key"
     # every runner feature is disposition-compatible (engineered from 'feature' attrs)
     assert "responseFlag" not in CTX_FEATURES
 
 
-def test_channel_context_covers_outward_payments_with_ato_pattern():
+def test_origination_context_covers_outward_payments_with_ato_pattern():
     pay, ctx, events = _ctx()
     outward = pay[pay["direction"] == "outward"]
     assert len(ctx) == len(outward)

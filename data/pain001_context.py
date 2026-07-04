@@ -1,12 +1,19 @@
 """
-eFRM channel source - the digital-banking (channel/device/session/audit) view of a payment,
-modelled as an ADDITIONAL SOURCE beside the interbank ISO view (multi-source, like
-data/iso_lifecycle): its own event stream + a per-transaction channel-context frame, fused at
-the entity/embedding level. It is NEVER join-widened into the pacs row - the encoder schema,
+pain.001 ORIGINATION CONTEXT - the channel/device/session/audit detail our own bank captures
+at ACQUISITION, i.e. the moment the customer initiates the payment (IB/MB channel or API) and
+the pain.001 is born. NOT a separate fraud system's data: it is the earliest slice of the
+payment's own lifecycle - available at t=0 for every initiation-time prediction - and its
+precursor events (login, payee-add, credential changes) sit on the UETR timeline BEFORE the
+pain.001. Only OUTWARD payments carry it: an inward payment's pain.001 originates at the
+remote debtor bank (consistent with iso_lifecycle.MSG_FLOW visibility).
+
+Modelled as an additional source beside the interbank ISO view (multi-source, like
+data/iso_lifecycle): its own event stream + a per-transaction context frame, fused at the
+entity/embedding level. It is NEVER join-widened into the pacs row - the encoder schema,
 serving bundle and existing tests are untouched.
 
-Source of truth: the bank's eFRM request schema (eFRM.xlsx, ~84 attributes). EFRM_ATTRS below
-records the DISPOSITION of every attribute group:
+Source of truth: the origination-channel request schema (workbook eFRM.xlsx, ~84 attributes).
+ORIGINATION_ATTRS below records the DISPOSITION of every attribute group:
   feature    genuinely new signal for the TFM (channel/device/session/audit axes)
   duplicate  already carried by the ISO view (amount, ccy, parties, countries, ...)
   label      an OUTCOME (responseFlag/ErrCode) - never an intake feature (leakage)
@@ -19,7 +26,7 @@ Synthetic behaviour (documented choices):
   * an ATO (account-takeover) episode = new device + credential change + payee-add shortly
     before an outward payment (the classic change-then-drain pattern) -> atoFlag=1
   * the ATO signal lives ONLY in this source - by construction the ISO row cannot see it.
-    That is the point: run_efrm.py measures the fusion lift, i.e. what the second source buys.
+    run_origination.py measures the fusion lift the origination context buys.
 """
 
 from __future__ import annotations
@@ -28,9 +35,9 @@ import numpy as np
 import pandas as pd
 
 # --------------------------------------------------------------------------- #
-# Disposition registry (exact attribute names from the eFRM sheet)
+# Disposition registry (exact attribute names from the origination sheet)
 # --------------------------------------------------------------------------- #
-EFRM_ATTRS = {
+ORIGINATION_ATTRS = {
     # Channel
     "userId": "key", "groupId": "duplicate", "customerId": "duplicate",
     "channelId": "feature", "deviceOs": "feature", "deviceAgent": "feature",
@@ -80,15 +87,15 @@ DEVICE_OS = {"IB": ["Windows", "macOS"], "MB": ["Android", "iOS"]}
 EVENT_TYPES = ["login", "txn", "payee_add", "password_change", "mobile_change", "email_change"]
 
 
-def build_channel_events(pay: pd.DataFrame, seed: int = 23, ato_frac: float = 0.02,
-                         new_device_frac: float = 0.05, geo_noise_frac: float = 0.02):
-    """Synthesise the eFRM view for OUTWARD payments of an India dataset.
+def build_origination_context(pay: pd.DataFrame, seed: int = 23, ato_frac: float = 0.02,
+                              new_device_frac: float = 0.05, geo_noise_frac: float = 0.02):
+    """Synthesise the pain.001 origination context for OUTWARD payments.
 
     Returns (ctx, events):
-      ctx     one row per outward payment_id - the channel context at transaction time
-              (features per EFRM_ATTRS) + atoFlag (label; the drain payment of an episode)
-      events  the raw channel event stream (login / payee_add / credential changes / txn),
-              keyed by userId & deviceId, minutes-timestamped around the payment
+      ctx     one row per outward payment_id - the channel context at ACQUISITION time
+              (features per ORIGINATION_ATTRS) + atoFlag (the drain payment of an episode)
+      events  the pre-initiation event stream (login / payee_add / credential changes / txn),
+              keyed by userId & deviceId; t_offset_min < 0 = minutes BEFORE the pain.001
     """
     rng = np.random.default_rng(seed)
     out = pay[pay["direction"] == "outward"].reset_index(drop=True)

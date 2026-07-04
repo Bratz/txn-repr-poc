@@ -262,29 +262,39 @@ lifecycle/repair/status labels a real hub generates — especially from partial 
 
 ---
 
-## 5b. Second source onboarded: the eFRM channel view
+## 5b. Second source onboarded: the pain.001 ORIGINATION CONTEXT
 
-The bank's eFRM request schema (~84 attributes: channel/device/session/audit/payee) is now an
-ADDITIONAL SOURCE (`data/efrm_source.py`), following the same multi-source pattern as the ISO
-lifecycle: its own event stream + a per-transaction channel-context frame, fused at the
+The origination-channel schema (workbook eFRM.xlsx, ~84 attributes: channel/device/session/
+audit/payee) is **not a separate fraud system's data — it is the detail our own bank captures
+at ACQUISITION, when the customer initiates the payment and the pain.001 is born.** It is now
+an additional source (`data/pain001_context.py`) following the same multi-source pattern as
+the ISO lifecycle: its own event stream + a per-transaction context frame, fused at the
 embedding level — never join-widened into the pacs row (no encoder/bundle/test ripple).
 
-**Attribute triage** (full registry in `EFRM_ATTRS`, dispositions unit-tested):
-~25 **feature** (device identity/integrity, IP-vs-account geo, session timing,
-failedLogins_1hr, credential-change + payee-add events — the ATO axes absent from ISO
-messages) · ~20 **duplicate** of the ISO view (amount/ccy/parties/countries/instrument) ·
-**label** responseFlag/ErrCode (outcomes — banned from intake features) · **key**
-traceIds/userId/sessionId (entity/join keys) · **park** card block + deviceTrustLevel
-(another model's output — circularity) · **skip** the 16 extensibility placeholders.
+Three consequences of the corrected semantics:
+* the context exists at **t=0**, so it may legitimately feed EVERY initiation-time head
+  (STP/ETA/cancel/return), not just fraud;
+* only **outward** payments carry it — an inward pain.001 originates at the remote debtor
+  bank (consistent with MSG_FLOW visibility);
+* the precursor events (login, payee-add, credential change) sit ON the UETR timeline
+  before the pain.001 (negative t_offset), i.e. one lifecycle, not two systems.
 
-**Synthetic behaviour + measurement** (`run_efrm.py`): a rare ATO episode (new device +
-credential change + payee-add + login burst → drain payment) exists only in the channel
-source. Measured (held-out): ISO-view-only PR-AUC **0.018** (≈ prevalence — blind by
-construction) vs channel/fused **1.00** (the synthetic pattern is deterministic, hence the
-ceiling; real data will land between). The point demonstrated: this label class **requires**
-the second source; fusion carries it without touching the ISO backbone. Next step on real
-data: entity-level fusion through the v2 sequence encoder (userId/deviceId histories), where
-the interaction signals live.
+**Attribute triage** (registry `ORIGINATION_ATTRS`, dispositions unit-tested):
+~25 **feature** (device identity/integrity, IP-vs-account geo, session timing,
+failedLogins_1hr, credential-change + payee-add events — axes absent from ISO messages) ·
+~20 **duplicate** of the ISO view (amount/ccy/parties/countries/instrument) · **label**
+responseFlag/ErrCode (outcomes — banned from intake features) · **key** traceIds/userId/
+sessionId (entity/join keys) · **park** card block + deviceTrustLevel (another model's
+output — circularity) · **skip** the 16 extensibility placeholders.
+
+**Synthetic behaviour + measurement** (`run_origination.py`): a rare ATO episode (new device
++ credential change + payee-add + login burst → drain payment) exists only in the origination
+context. Measured (held-out): ISO-view-only PR-AUC **0.03** (≈ prevalence — blind by
+construction) vs context/fused **1.00** (the synthetic pattern is deterministic, hence the
+ceiling; real data lands between). Demonstrated: this label class **requires** the
+origination slice; fusion carries it without touching the ISO backbone. Next steps: fuse the
+context into the A–G initiation heads, and entity-level fusion through the v2 sequence
+encoder (userId/deviceId histories) on real data.
 
 ## 6. Scaling note — does the tabular method hold as we add columns/tables?
 
