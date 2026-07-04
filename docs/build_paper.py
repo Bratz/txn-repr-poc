@@ -5,6 +5,7 @@ Every number is the measured one from the H200 full runs (results_*.json,
 RESULTS.md, docs/V2_DIRECTION.md). No number in this paper is aspirational.
 """
 import json
+import math
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -12,6 +13,7 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.graphics.shapes import Drawing, Line, Polygon, Rect, String
 from reportlab.platypus import (
     HRFlowable, PageBreak, Paragraph, Preformatted, SimpleDocTemplate, Spacer,
     Table, TableStyle,
@@ -60,6 +62,72 @@ def h3(t): story.append(Paragraph(t, H3))
 def body(t): story.append(Paragraph(t, BODY))
 def ref(t): story.append(Paragraph(t, REF))
 def cap(t): story.append(Paragraph(t, CAP))
+
+
+# Redrawn from the source paper's decoder architecture (Raman et al. [1], Sec. 4 /
+# Eq. 5). Our own rendering - shared with docs/build_science_paper.py.
+def design_drawing():
+    d = Drawing(460, 322)
+    ac_f, ac_s = colors.HexColor("#dce8f7"), colors.HexColor("#2c6ecb")
+    fr_f, fr_s = colors.HexColor("#e7e8ea"), colors.HexColor("#9a9aa0")
+    pl_f, pl_s = colors.white, colors.HexColor("#c4c4c8")
+    grey = colors.HexColor("#6b6b70")
+
+    def txt(x, y, s, size=8, bold=False, col=INK, anchor="middle"):
+        d.add(String(x, y, s, fontName="Helvetica-Bold" if bold else "Helvetica",
+                     fontSize=size, fillColor=col, textAnchor=anchor))
+
+    def cbox(x, y, w, h, kind, title, sub=None, tsize=8):
+        f, s = {"a": (ac_f, ac_s), "f": (fr_f, fr_s), "p": (pl_f, pl_s)}[kind]
+        d.add(Rect(x, y, w, h, rx=4, ry=4, fillColor=f, strokeColor=s, strokeWidth=1))
+        cx = x + w / 2
+        if sub:
+            txt(cx, y + h / 2 + 2, title, tsize, True)
+            txt(cx, y + h / 2 - 8, sub, 6, col=MUTED)
+        else:
+            txt(cx, y + h / 2 - 3, title, tsize, True)
+
+    def arrow(x1, y1, x2, y2, dash=False):
+        ln = Line(x1, y1, x2, y2, strokeColor=grey, strokeWidth=1.2)
+        if dash:
+            ln.strokeDashArray = [3, 2]
+        d.add(ln)
+        ang = math.atan2(y2 - y1, x2 - x1)
+        bx, by = x2 - 5.5 * math.cos(ang), y2 - 5.5 * math.sin(ang)
+        px, py = -math.sin(ang) * 2.6, math.cos(ang) * 2.6
+        d.add(Polygon([x2, y2, bx + px, by + py, bx - px, by - py],
+                      fillColor=grey, strokeColor=grey))
+
+    cbox(0, 288, 64, 28, "p", "Payment", "pacs.008")
+    arrow(64, 302, 78, 302)
+    cbox(78, 288, 64, 28, "p", "Projection", "to row")
+    arrow(142, 302, 156, 302)
+    cbox(156, 288, 138, 28, "f", "Transaction encoder", "BERT 25M . frozen")
+    arrow(294, 302, 308, 302)
+    cbox(308, 288, 50, 28, "f", "f(x)", "embedding")
+
+    d.add(Rect(0, 16, 460, 248, rx=6, ry=6, fillColor=colors.white,
+               strokeColor=colors.HexColor("#d9d9dd"), strokeWidth=1))
+    txt(8, 250, "Decoder (Option B - the C5 comparison path)", 8, True, ACCENT,
+        anchor="start")
+    cbox(10, 208, 56, 32, "a", "phi prompt", "soft", 7.5)
+    cbox(72, 208, 34, 32, "a", "[R1]", "mark", 7.5)
+    cbox(112, 208, 84, 32, "a", "Phi( f(x) )", "payment -> token", 7.5)
+    cbox(202, 208, 116, 32, "p", "instruction", "classify risk ...", 7.5)
+    cbox(324, 208, 56, 32, "a", "psi task", "which Q", 7.5)
+    txt(196, 196, "one interleaved input (Eq. 5)", 6.5, col=MUTED)
+    arrow(330, 288, 154, 242, dash=True)
+    arrow(196, 193, 196, 154)
+    cbox(88, 118, 216, 36, "f", "Phi-1.5", "frozen . ~1.3B params . fp32", 10)
+    arrow(196, 118, 196, 86)
+    cbox(88, 52, 216, 34, "p", "next word -> A / B / C", "= the task's label")
+    cbox(320, 118, 134, 36, "a", "Trains: Phi . psi . phi", "~7.64M (<1% full tune)", 7.3)
+    cbox(320, 74, 134, 36, "f", "Frozen: encoder f, Phi-1.5", None, 7.3)
+    d.add(Rect(150, 26, 10, 10, fillColor=ac_f, strokeColor=ac_s, strokeWidth=1))
+    txt(166, 28, "Trained (small)", 7, col=MUTED, anchor="start")
+    d.add(Rect(262, 26, 10, 10, fillColor=fr_f, strokeColor=fr_s, strokeWidth=1))
+    txt(278, 28, "Frozen", 7, col=MUTED, anchor="start")
+    return d
 
 
 def table(headers, rows, widths):
@@ -215,8 +283,19 @@ body("For sequences, a small transformer (the history encoder) consumes the froz
      "one history vector per prefix. Downstream heads then take one of two forms. "
      "Option A is a linear probe on the history vector. Option B routes the same vector "
      "into a frozen Phi-1.5 [5] through trainable adapters in the prefix family [3, 4] - "
-     "7,638,528 trainable parameters against the LLM's 1.3B frozen ones. C5 is the "
-     "measured comparison between the two.")
+     "7,638,528 trainable parameters against the LLM's 1.3B frozen ones (Figure 1). C5 "
+     "is the measured comparison between the two.")
+story.append(Spacer(1, 4))
+story.append(design_drawing())
+story.append(Spacer(1, 4))
+cap("Figure 1: the frozen-encoder, frozen-LLM decoder with pretrained adapters, redrawn "
+    "from the architecture of Raman et al. [1] (Section 4, Eq. 5); our own rendering, "
+    "not a reproduction of their figure. Grey boxes never train; blue boxes are the "
+    "trainable trio - the adapter Phi projecting f(x) into the LLM's embedding space, "
+    "the task vector psi, and the soft prompt phi. The frozen LLM reads the interleaved "
+    "sequence as inputs_embeds and its next-word distribution, restricted to the answer "
+    "tokens, is the prediction. PULSE serves Option A (a linear probe); this Option B "
+    "path exists to measure C5, which retired it.")
 body("Not every question reaches the model. Rail caps and floors, assigned reference "
      "values, identifier lookups, and duplicate checks are answered by guards and "
      "templates that are exact by construction; we delisted those tasks from the model's "
