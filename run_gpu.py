@@ -183,17 +183,23 @@ def _single_examples(tdf, task):
 
 
 def _recurrence_groups(tdf, task, R):
-    """Multi-record task: each (debtor,creditor) group with ≥R txns → R records
-    (first R by settlement date). Returns (groups, label_strings) where each group
-    is an array of R row-positions into `tdf`."""
+    """Multi-record task: each group with ≥R txns → R records by settlement date.
+    task["take"] selects which R: "first" (default, v1 recurrence) or "spread"
+    (evenly spaced over the whole history — needed when the label is a mid-history
+    change, e.g. C7 regime). Returns (groups, label_strings); each group is an
+    array of R row-positions into `tdf`."""
     gcol, lcol = task["group_column"], task["label_column"]
+    take = task.get("take", "first")
     groups, labels = [], []
     for _, sub in tdf.groupby(gcol):
         sub = sub.sort_values("IntrBkSttlmDt")
         pos = sub.index.to_numpy()
         if len(pos) < R:
             continue
-        groups.append(pos[:R])
+        if take == "spread":
+            groups.append(pos[np.linspace(0, len(pos) - 1, R).round().astype(int)])
+        else:
+            groups.append(pos[:R])
         labels.append(str(sub[lcol].iloc[0]))        # constant within a group
     return groups, labels
 

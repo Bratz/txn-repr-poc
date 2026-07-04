@@ -57,6 +57,11 @@ python -u run_india.py --save model_india --out results_india.json
 #    whole classification menu and ship it INSTEAD of the classification probes.
 #    Compare per-task answer quality against run E's probes on the same split.
 python -u run_india.py --paper-serving --save model_india_paper --out results_india_paper.json
+
+# G. C7 - paper-native sequences: Eq. 5 multi-record + gap_band column vs the v2
+#    history encoder on the C3/C4 regime task (same corpus + actor split as run A).
+#    Within 5 pp of run A's h_USR probe -> the history encoder is deletable.
+python -u run_c7.py --out results_c7.json
 ```
 
 ## 4. Copy back

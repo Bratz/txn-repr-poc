@@ -61,6 +61,15 @@ FIXED-MENU accuracy; it is retained as the serving interface.
 | Claim | What it tests | Threshold | Status |
 |---|---|---|---|
 | **C6** instruction decoder vs the head farm, full scale (GPU, real Phi-1.5) | per-task answer quality of the ONE instruction-conditioned decoder across all 6 menu tasks vs the retired per-task probes on the same held-out split; params + wall-clock per added task | adopt decoder-only serving if macro answer quality is within 5 pp of the probes | **pre-registered — needs the GPU run** (`run_india.py --paper-serving --save model_india`, runbook F) |
+| **C7** paper-native sequences: Eq. 5 multi-record + a derived `gap_band` core column vs the v2 history encoder, on the SAME regime task, corpus, and actor split as C3/C4 | whether the paper's own sequence interface (R records evenly spread over the account history, timing as a table-native bucketed column) recovers the temporal signal our history encoder gets — i.e. whether the ONE piece of non-paper architecture in the stack is needed at all | held-out PR-AUC within 5 pp of the history-encoder incumbent at matched scale (full-scale incumbent 0.919) → the v2 history encoder is deletable and the whole system is the paper's stack; a miss keeps it, documented | **pre-registered — needs the GPU run** (`run_c7.py`, runbook G). CPU smoke validates the path only (MockLLM, 138 examples) |
+
+C7's honest stakes cut both ways. A pass means our v2 history encoder was never necessary -
+Eq. 5 with one derived time column carries C3/C4 - and PULSE collapses to exactly the paper's
+architecture end to end. A miss is equally informative: it localises what the paper's
+interleaving cannot read (long-range temporal order beyond R spread records) and justifies the
+history encoder as a measured, not assumed, extension. Records are spread evenly over the
+history because the regime label is a mid-history change - a first-R or last-R window sees only
+one regime and would rig the test against the paper.
 
 ---
 
