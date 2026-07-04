@@ -619,6 +619,18 @@ class IndiaScorer:
         return out
 
 
+def _shim_sklearn_pickles(obj):
+    """sklearn >=1.8 pickles drop LogisticRegression.multi_class; a <=1.7 runtime
+    (Python 3.10 caps at 1.7) still reads the attribute in predict_proba. Restore
+    the default so bundles trained on newer boxes stay loadable."""
+    from sklearn.linear_model import LogisticRegression
+    if isinstance(obj, LogisticRegression) and not hasattr(obj, "multi_class"):
+        obj.multi_class = "deprecated"
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _shim_sklearn_pickles(v)
+
+
 def load_india_model(save_dir, device=None) -> IndiaScorer:
     import joblib
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -642,6 +654,7 @@ def load_india_model(save_dir, device=None) -> IndiaScorer:
     encoder.freeze()
     encoder.to(device)
     probes = joblib.load(Path(save_dir) / _PROBES)
+    _shim_sklearn_pickles(probes)
     hist = None
     if (save_dir / _HIST).exists():
         from encoder.history_encoder import HistoryConfig, HistoryEncoder
