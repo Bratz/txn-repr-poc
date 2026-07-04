@@ -58,6 +58,12 @@ def test_api_endpoints_roundtrip(tmp_path, monkeypatch):
             assert x["eta_remaining_min"] >= 0
             assert x["settlement_outcome"] is None or isinstance(x["settlement_outcome"], dict)
 
+        lf = c.post("/forecast/liquidity",
+                    json={"payments": json.loads(pay.head(50).to_json(orient="records"))})
+        assert lf.status_code == 200
+        body = lf.json()
+        assert body["n_payments"] > 0 and len(body["total"]) == len(body["buckets"])
+
         assert c.post("/score/intake", json={}).status_code == 422    # neither rows nor XML
         bad = c.post("/score/inflight", json={"messages": [{"foo": 1}]})
         assert bad.status_code == 422                                 # missing stream columns

@@ -10,6 +10,10 @@ available fields and, from that frozen representation, evaluate:
   * E  cancellation likelihood  -> cancel_requested  (will the originator recall it? camt.056)
   * F  return likelihood        -> returned          (will funds bounce back? pacs.004)
   * G  charges                  -> charges           (fee regression; predictable bps-of-amount)
+  * H  recall success           -> cancel_status CNCL vs RJCR, among recall-requested payments
+                                   ("if you recall this, will you get the money back?")
+  * I  self-heal                -> REPAIRED vs manual/reject, among troubled (non-STP) payments
+                                   (repair-desk triage: leave it alone or staff it)
   * imputation                  -> per-field top-1 reconstruction of the masked fields
 
 fx_rate is deliberately NOT a head - it is market noise (unpredictable from the payment).
@@ -73,6 +77,16 @@ def _bin(emb, y, tr, ev):
     clf = LogisticRegression(max_iter=1000, class_weight="balanced").fit(emb[tr], y[tr])
     p = clf.predict_proba(emb[ev])[:, 1]
     return float(average_precision_score(y[ev], p)), prev
+
+
+def _bin_on(emb, mask, y, tr, ev, min_rows=20):
+    """_bin restricted to a subpopulation (e.g. recall-requested / troubled payments)."""
+    tr_s = np.array([i for i in tr if mask[i]])
+    ev_s = np.array([i for i in ev if mask[i]])
+    if len(tr_s) < min_rows or len(ev_s) < min_rows:
+        return float("nan"), float("nan"), int(len(ev_s))
+    pr, prev = _bin(emb, y, tr_s, ev_s)
+    return pr, prev, int(len(ev_s))
 
 
 def _reg_mae(emb, y, tr, ev):
@@ -166,6 +180,10 @@ def main():
     y_cancel = pay["cancel_requested"].to_numpy()
     y_return = pay["returned"].to_numpy()
     y_charges = pay["charges"].to_numpy(dtype=float) if "charges" in pay.columns else None
+    m_recall = pay["cancel_requested"].to_numpy() == 1
+    y_recall_ok = (pay["cancel_status"] == "CNCL").to_numpy()
+    m_trouble = (pay["terminal_status"] != "STP").to_numpy()
+    y_heal = (pay["terminal_status"] == "REPAIRED").to_numpy()
 
     imp, rows = {}, {}
     for si, (sname, _) in enumerate(ENRICH_ADDS):
@@ -201,6 +219,12 @@ def main():
             rows[sname]["charges_mae"] = g_mae
             rows[sname]["charges_baseline_mae"] = g_base
             print(f"{'':11s} G charges MAE {g_mae:.1f} (base {g_base:.1f})")
+        h_pr, h_prev, h_n = _bin_on(emb, m_recall, y_recall_ok, tr, ev)     # H recall success
+        i_pr, i_prev, i_n = _bin_on(emb, m_trouble, y_heal, tr, ev)         # I self-heal
+        rows[sname].update({"recall_success_pr_auc": h_pr, "recall_success_prev": h_prev,
+                            "selfheal_pr_auc": i_pr, "selfheal_prev": i_prev})
+        print(f"{'':11s} H recall-ok PR {h_pr:.3f} (prev {h_prev:.3f}, n={h_n})   "
+              f"I self-heal PR {i_pr:.3f} (prev {i_prev:.3f}, n={i_n})")
 
     print("\nimputation top-1  (structured fields only; high-card IDs delisted = lookup/assigned):")
     cols = [n for n, _ in ENRICH_ADDS]

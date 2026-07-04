@@ -111,6 +111,21 @@ def score_intake(req: IntakeRequest):
     return {"model": _meta.get("model_dir"), "results": recs}
 
 
+@app.post("/forecast/liquidity")
+def forecast_liquidity(req: IntakeRequest):
+    """Treasury outflow curve: rail x settlement-time bucket, aggregated from per-payment
+    ETA predictions (outward payments only). Point-estimate ETAs - a planning view, not a
+    guarantee."""
+    if not req.payments:
+        raise HTTPException(422, "provide `payments` rows")
+    df = pd.DataFrame(req.payments)
+    try:
+        res = _scorer.liquidity_forecast(df)
+    except KeyError as e:
+        raise HTTPException(422, f"payment rows are missing a required column: {e}")
+    return {"model": _meta.get("model_dir"), **res}
+
+
 @app.post("/score/velocity")
 def score_velocity(req: VelocityRequest):
     df = pd.DataFrame(req.transactions)

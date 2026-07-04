@@ -472,6 +472,38 @@ class IndiaScorer:
                              "burst_proba": np.round(proba, 4),
                              "burst_rule": rule.astype(int)})
 
+    def liquidity_forecast(self, df, bucket_edges_min=(1, 15, 60, 240, 1440)):
+        """Treasury view: expected OUTFLOW by rail x settlement-time bucket, aggregated from
+        the per-payment ETA predictions. Pure arithmetic over existing heads - no new model.
+
+        Uses the ETA point estimate per payment (simplification: not a distribution) and
+        outward payments only when a `direction` column is present (outflow = money leaving).
+        Returns {"buckets": [...labels...], "by_rail": {rail: [amount per bucket]},
+                 "total": [amount per bucket], "n_payments": int, "total_amount": float}.
+        """
+        sub = df[df["direction"] == "outward"] if "direction" in df.columns else df
+        sub = sub.reset_index(drop=True)
+        if not len(sub):
+            return {"buckets": [], "by_rail": {}, "total": [], "n_payments": 0,
+                    "total_amount": 0.0}
+        res = self.predict(sub)
+        eta = res["eta_min_pred"].to_numpy(dtype=float)
+        amt = sub["IntrBkSttlmAmt"].to_numpy(dtype=float)
+        rails = res["rail_pred"].to_numpy()
+        edges = list(bucket_edges_min)
+        labels = ([f"<{edges[0]}m"]
+                  + [f"{a}-{b}m" for a, b in zip(edges[:-1], edges[1:])]
+                  + [f">{edges[-1]}m"])
+        idx = np.searchsorted(edges, eta, side="right")
+        by_rail = {}
+        for r in sorted(set(rails.tolist())):
+            m = rails == r
+            by_rail[r] = [round(float(amt[m & (idx == b)].sum()), 2)
+                          for b in range(len(labels))]
+        total = [round(float(amt[idx == b].sum()), 2) for b in range(len(labels))]
+        return {"buckets": labels, "by_rail": by_rail, "total": total,
+                "n_payments": int(len(sub)), "total_amount": round(float(amt.sum()), 2)}
+
     def explain(self, df, top_k=5):
         """Column-occlusion drivers per payment (FAITHFUL attribution, no LLM): occlude one
         feature column at a time (categoricals -> 'Unknown', amount -> 0.0), re-embed, and

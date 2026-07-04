@@ -122,3 +122,12 @@ def test_save_load_predict_roundtrip(tmp_path):
     drv = scorer.explain(sub.head(2), top_k=4)
     assert len(drv) == 2 and all(len(d) <= 4 for d in drv)
     assert {"field", "rail_impact", "risk_impact", "eta_impact_min"} <= set(drv[0][0])
+
+    # liquidity forecast: outflow buckets conserve the outward amount exactly
+    fc = scorer.liquidity_forecast(pay.head(200))
+    outward = pay.head(200)[pay.head(200)["direction"] == "outward"]
+    assert fc["n_payments"] == len(outward)
+    assert abs(sum(fc["total"]) - outward["IntrBkSttlmAmt"].sum()) < 1.0
+    for r, series in fc["by_rail"].items():
+        assert len(series) == len(fc["buckets"])
+    assert abs(sum(sum(v) for v in fc["by_rail"].values()) - sum(fc["total"])) < 1.0
