@@ -18,10 +18,19 @@ All runners auto-select `cuda` when available — no flags needed.
 ## 2. Generate the datasets (gitignored — must be built on the box, ~2 min)
 
 ```bash
-python data/synth_sequences.py                                  # §7 behavioural corpus (run_seq)
+python data/synth_sequences.py --out data/pacs008_seq.parquet \
+    --schema-out data/column_schema_seq.json                    # §7 behavioural corpus (run_seq)
 python data/synth_india_rails.py --accounts 4000 --payments 20000 \
     --out-prefix data/india_rails --schema-out data/column_schema_india.json
 ```
+
+Paths matter: `run_seq.py` reads `data/pacs008_seq.parquet`; without `--out` the generator
+writes to the current directory, and a full run now fails loudly instead of silently using
+the 500-row reference sample.
+
+Sanity check before burning GPU time: the first line every runner prints is `device=cuda`.
+`device=cpu` means the shell's torch has no CUDA (usually the venv wasn't activated -
+`. /venv/main/bin/activate` on vast.ai base images) - fix that before proceeding.
 
 ## 3. The runs, in value order
 

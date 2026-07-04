@@ -54,6 +54,9 @@ def load_data_and_schema(args):
         except Exception as e:
             print(f"(could not read {path.name}: {e}; using reference sample)")
     if df is None:
+        if not getattr(args, "smoke", False):
+            raise SystemExit(f"{path} missing - a full run on the 500-row reference sample "
+                             "is meaningless. Generate it first (see docs/VAST_RUNBOOK.md).")
         df = pd.read_csv(ROOT / "data" / "pacs008_sample_500.csv")
         print("NOTE: using committed reference sample (run synth_pacs008.py for full data)")
     if args.limit and args.limit < len(df):
