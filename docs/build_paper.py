@@ -84,9 +84,8 @@ story.append(Paragraph(
     "PULSE: Payment Understanding, Lifecycle Scoring &amp; Embeddings<br/>"
     "A Transaction Foundation Model on Synthetic ISO 20022 Rails -<br/>"
     "a Falsifiable Replication and Extension of arXiv:2410.07851", TITLE))
-story.append(Paragraph("Subrato B. &nbsp;·&nbsp; subrato.b@outlook.com", AUTH))
-story.append(Paragraph(
-    "Preprint · July 2026 · code and generators: github.com/Bratz/txn-repr-poc", AUTH))
+story.append(Paragraph("Subrato B.", AUTH))
+story.append(Paragraph("Preprint · July 2026", AUTH))
 story.append(Spacer(1, 8))
 story.append(HRFlowable(width="100%", thickness=0.6, color=LINE))
 story.append(Spacer(1, 6))
