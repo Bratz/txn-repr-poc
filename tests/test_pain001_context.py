@@ -56,3 +56,13 @@ def test_ctx_matrix_shape_and_log_scaling():
     X = ctx_matrix(ctx)
     assert X.shape == (len(ctx), len(CTX_FEATURES))
     assert np.isfinite(X).all()
+
+
+def test_ato_couples_to_recall_label():
+    # recalls disproportionately follow ATO drains (documented coupling) -> the origination
+    # context is genuinely predictive of the cancel head, not decorative.
+    pay, ctx, _ = _ctx(8000)
+    j = ctx.merge(pay[["payment_id", "cancel_requested"]], on="payment_id")
+    p_ato = j.loc[j.atoFlag == 1, "cancel_requested"].mean()
+    p_not = j.loc[j.atoFlag == 0, "cancel_requested"].mean()
+    assert p_ato > p_not + 0.05

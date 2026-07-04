@@ -179,6 +179,8 @@ def main():
         with torch.no_grad():
             emb = (encoder.forward(full, cm)[0] if cm is not None
                    else encoder.encode(full)).cpu().numpy()
+        if sname == "pain.001":
+            emb_pain = emb                      # kept for the origination-context fusion
         a_acc, a_f1 = _clf(emb, y_status, tr, ev)                       # A
         b_acc, b_f1 = _clf(emb, y_reason, tr, ev)                       # B
         c_mae, c_base = _reg_mae(emb, y_eta, tr, ev)                    # C
@@ -208,6 +210,34 @@ def main():
         print(f"  {f:18s} " + " ".join(f"{c:>9s}" for c in cells))
     print(f"  (delisted, not imputed: {sorted(hicard)})")
 
+    # --- origination-context fusion at the pain.001 view (outward only; t=0 data) ------- #
+    # The context is captured when the pain.001 is born, so the initiation heads are
+    # entitled to it. Inward payments have none (their pain.001 lives at the remote bank),
+    # so the fusion is evaluated on the outward subset.
+    from data.pain001_context import CTX_FEATURES, build_origination_context, ctx_matrix
+    ctx, _ = build_origination_context(pay)
+    fusion = None
+    if len(ctx):
+        cpos = pay.reset_index().set_index("payment_id").loc[ctx["payment_id"], "index"]
+        C_full = np.zeros((B, len(CTX_FEATURES)))
+        C_full[cpos.to_numpy()] = ctx_matrix(ctx)
+        m = np.zeros(B, dtype=bool); m[cpos.to_numpy()] = True
+        tr_m = np.array([i for i in tr if m[i]]); ev_m = np.array([i for i in ev if m[i]])
+        fused = np.hstack([emb_pain, C_full])
+        fusion = {}
+        a0 = _clf(emb_pain[:], y_status, tr_m, ev_m); a1 = _clf(fused, y_status, tr_m, ev_m)
+        c0 = _reg_mae(emb_pain[:], y_eta, tr_m, ev_m); c1 = _reg_mae(fused, y_eta, tr_m, ev_m)
+        e0 = _bin(emb_pain[:], y_cancel, tr_m, ev_m); e1 = _bin(fused, y_cancel, tr_m, ev_m)
+        f0 = _bin(emb_pain[:], y_return, tr_m, ev_m); f1 = _bin(fused, y_return, tr_m, ev_m)
+        fusion = {"n_outward": int(m.sum()),
+                  "stp_acc": [a0[0], a1[0]], "eta_mae": [c0[0], c1[0]],
+                  "cancel_pr_auc": [e0[0], e1[0]], "return_pr_auc": [f0[0], f1[0]]}
+        print("\norigination-context fusion @ pain.001 (outward; base -> fused):")
+        print(f"  A STP acc     {a0[0]:.3f} -> {a1[0]:.3f}")
+        print(f"  C ETA MAE     {c0[0]:.1f} -> {c1[0]:.1f} min")
+        print(f"  E cancel PR   {e0[0]:.3f} -> {e1[0]:.3f}   (prev {e0[1]:.3f})")
+        print(f"  F return PR   {f0[0]:.3f} -> {f1[0]:.3f}   (prev {f0[1]:.3f})")
+
     stream = None
     mp = Path(args.messages)
     if mp.exists():
@@ -218,6 +248,7 @@ def main():
 
     Path(args.out).write_text(json.dumps({"predictions_by_view": rows,
                                           "imputation_top1": imp,
+                                          "origination_fusion": fusion,
                                           "streaming_outcome": stream}, indent=2))
     print(f"\nwrote {args.out}")
 

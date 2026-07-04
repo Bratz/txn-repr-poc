@@ -104,7 +104,11 @@ def build_origination_context(pay: pd.DataFrame, seed: int = 23, ato_frac: float
     for r in out.itertuples():
         user = str(r.UltmtDbtr_Id)
         base = user_dev.setdefault(user, f"DEV-{abs(hash(user)) % 10**8:08d}")
-        ato = rng.random() < ato_frac
+        # ATO drains are disproportionately the payments the originator later RECALLS
+        # (camt.056) - fraud discovered -> recall. Documented coupling: it is what makes
+        # the origination context genuinely predictive of the cancel head, not decoration.
+        recalled = int(getattr(r, "cancel_requested", 0) or 0)
+        ato = rng.random() < ato_frac * (8.0 if recalled else 0.8)
         new_dev = ato or (rng.random() < new_device_frac)
         device = f"DEV-{rng.integers(10**7, 10**8):08d}" if new_dev else base
         channel = str(rng.choice(CHANNELS))
