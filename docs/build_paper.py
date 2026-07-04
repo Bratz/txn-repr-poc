@@ -76,9 +76,9 @@ def table(headers, rows, widths):
 
 # ====================================================== TITLE + ABSTRACT
 story.append(Paragraph(
-    "One Frozen Encoder, Many Payment Decisions:<br/>"
-    "A Falsifiable Replication of a Transaction Foundation Model,<br/>"
-    "Extended to the ISO 20022 Payment Lifecycle", TITLE))
+    "PULSE: Payment Understanding, Lifecycle Scoring &amp; Embeddings<br/>"
+    "A Transaction Foundation Model on Synthetic ISO 20022 Rails -<br/>"
+    "a Falsifiable Replication and Extension of arXiv:2410.07851", TITLE))
 story.append(Paragraph("Subrato B. &nbsp;·&nbsp; subrato.b@outlook.com", AUTH))
 story.append(Paragraph(
     "Preprint · July 2026 · code and generators: github.com/Bratz/txn-repr-poc", AUTH))
@@ -87,8 +87,9 @@ story.append(HRFlowable(width="100%", thickness=0.6, color=LINE))
 story.append(Spacer(1, 6))
 story.append(Paragraph(
     "<b>Abstract.</b> "
-    "We replicate the transaction foundation model of Raman et al. (arXiv:2410.07851) on "
-    "synthetic ISO 20022 payments and measure, against thresholds fixed before each run, "
+    "We present PULSE, a transaction foundation model built by replicating the architecture "
+    "of Raman et al. (arXiv:2410.07851) on synthetic ISO 20022 payments and measuring, "
+    "against thresholds fixed before each run, "
     "what a single frozen tabular encoder can and cannot predict about a payment. Five "
     "claims were pre-registered. Two replicate the source paper: the partitioned "
     "high-cardinality embedder matches dense masked-column reconstruction at 5.8% of the "
@@ -373,7 +374,7 @@ body("Everything here is synthetic, and the generators were written by the same 
 
 # ====================================================== 9 CONCLUSION
 h2("9&nbsp;&nbsp;Conclusion")
-body("One frozen encoder does carry many payment decisions - provided one is honest "
+body("PULSE's frozen encoder does carry many payment decisions - provided one is honest "
      "about which ones. Where the signal is a rule over a complete row, a "
      "gradient-boosted tree wins and should be shipped instead (C2b, routing, status). "
      "Where the signal is order, timing, partial information, or a second source the "
@@ -416,7 +417,7 @@ def _footer(canvas, doc):
     canvas.saveState()
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(MUTED)
-    canvas.drawString(20 * mm, 11 * mm, "txn-repr-poc - preprint")
+    canvas.drawString(20 * mm, 11 * mm, "PULSE (txn-repr-poc) - preprint")
     canvas.drawRightString(A4[0] - 20 * mm, 11 * mm, str(doc.page))
     canvas.restoreState()
 
@@ -424,7 +425,7 @@ def _footer(canvas, doc):
 doc = SimpleDocTemplate(str(OUT), pagesize=A4,
                         leftMargin=20 * mm, rightMargin=20 * mm,
                         topMargin=18 * mm, bottomMargin=18 * mm,
-                        title="One Frozen Encoder, Many Payment Decisions",
+                        title="PULSE: Payment Understanding, Lifecycle Scoring & Embeddings",
                         author="txn-repr-poc")
 doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
 print(f"wrote {OUT}")
