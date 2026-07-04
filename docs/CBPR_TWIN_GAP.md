@@ -262,6 +262,30 @@ lifecycle/repair/status labels a real hub generates — especially from partial 
 
 ---
 
+## 5b. Second source onboarded: the eFRM channel view
+
+The bank's eFRM request schema (~84 attributes: channel/device/session/audit/payee) is now an
+ADDITIONAL SOURCE (`data/efrm_source.py`), following the same multi-source pattern as the ISO
+lifecycle: its own event stream + a per-transaction channel-context frame, fused at the
+embedding level — never join-widened into the pacs row (no encoder/bundle/test ripple).
+
+**Attribute triage** (full registry in `EFRM_ATTRS`, dispositions unit-tested):
+~25 **feature** (device identity/integrity, IP-vs-account geo, session timing,
+failedLogins_1hr, credential-change + payee-add events — the ATO axes absent from ISO
+messages) · ~20 **duplicate** of the ISO view (amount/ccy/parties/countries/instrument) ·
+**label** responseFlag/ErrCode (outcomes — banned from intake features) · **key**
+traceIds/userId/sessionId (entity/join keys) · **park** card block + deviceTrustLevel
+(another model's output — circularity) · **skip** the 16 extensibility placeholders.
+
+**Synthetic behaviour + measurement** (`run_efrm.py`): a rare ATO episode (new device +
+credential change + payee-add + login burst → drain payment) exists only in the channel
+source. Measured (held-out): ISO-view-only PR-AUC **0.018** (≈ prevalence — blind by
+construction) vs channel/fused **1.00** (the synthetic pattern is deterministic, hence the
+ceiling; real data will land between). The point demonstrated: this label class **requires**
+the second source; fusion carries it without touching the ISO backbone. Next step on real
+data: entity-level fusion through the v2 sequence encoder (userId/deviceId histories), where
+the interaction signals live.
+
 ## 6. Scaling note — does the tabular method hold as we add columns/tables?
 
 The paper's encoder is a **Transformer over columns-as-tokens**, so scaling behaves as:
