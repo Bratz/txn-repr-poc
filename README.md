@@ -1,12 +1,23 @@
-# Transaction Representation Learning — Fraud/Risk POC
+# PULSE — Payment Understanding, Lifecycle Scoring & Embeddings
 
-A grounded, faithful prototype of:
+A transaction foundation model on synthetic ISO 20022 rails, built as a grounded,
+faithful replication of:
 
 > Raman, Ganesh, Veloso (JPMorgan AI Research), *Scalable Representation
 > Learning for Multimodal Tabular Transactions*, arXiv:2410.07851, NeurIPS 2024.
 
-Applied to ISO 20022 (pacs.008) payments for fraud/risk tagging, on **synthetic
-data only**. v1 replicates the paper — no extensions.
+v1 (below) replicates the paper with no extensions, on **synthetic data only**.
+The project has since grown around that frozen core — measured, never retuned:
+
+- **Research paper**: [docs/TXN_REPR_PAPER.pdf](docs/TXN_REPR_PAPER.pdf) — the five
+  pre-registered claims (C1–C5), wins and nulls alike. `docs/V2_DIRECTION.md` holds
+  the claims ledger.
+- **ISO 20022 lifecycle twin**: nine message types (pain.001 → pacs.008 →
+  camt.054, recall/return legs), India rails (RTGS/NEFT/IMPS/SWIFT) —
+  `docs/INDIA_RAILS.md`, `docs/CBPR_TWIN_GAP.md`.
+- **Serving**: calibrated intake / in-flight / velocity / forecast heads behind a
+  FastAPI (`serve_india.py`, `api_india.py`) — samples in `docs/API_SAMPLES.md`.
+- **Evidence deck**: `docs/txn_repr_evidence.pptx`.
 
 ## Architecture — and how Phi-1.5 is used
 
