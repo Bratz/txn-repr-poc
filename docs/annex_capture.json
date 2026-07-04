@@ -1,0 +1,460 @@
+{
+  "uc1_small_domestic": {
+    "request": {
+      "DbtrAcct_Id": "AZLN7144",
+      "CdtrAcct_Id": "0QF6OXNV",
+      "UltmtDbtr_Id": "HT8JC5",
+      "UltmtCdtr_Id": "UWK0LS",
+      "IntrBkSttlmAmt": 832.91,
+      "Ccy": "INR",
+      "IntrBkSttlmDt": "2023-11-30",
+      "SttlmMtd": "CLRG",
+      "identifier_type": "ACCT_IFSC",
+      "Dbtr_Nm": "Granite GmbH Capital Services",
+      "Cdtr_Nm": "Harbor Inc Sales Capital",
+      "UltmtDbtr_Nm": "Granite GmbH Capital",
+      "UltmtCdtr_Nm": "Harbor Inc Sales",
+      "Dbtr_Ctry": "IN",
+      "Cdtr_Ctry": "IN",
+      "Dbtr_Industry": "Communications",
+      "Cdtr_Industry": "Energy",
+      "Dbtr_SubIndustry": "Media",
+      "Cdtr_SubIndustry": "Renewables"
+    },
+    "response": {
+      "rail_pred": "IMPS",
+      "rail_conf": 0.624,
+      "status_pred": "STP",
+      "eta_min_pred": 0.0,
+      "risk_pred": "Low",
+      "geography_pred": "Asia",
+      "expense_pred": "Operational",
+      "top_exception_risks": [
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "below_min",
+          "score": 0.04
+        },
+        {
+          "code": "fraud_hold",
+          "score": 0.03
+        }
+      ]
+    },
+    "truth": {
+      "rail": "IMPS",
+      "terminal_status": "STP"
+    }
+  },
+  "uc2_high_value_rtgs": {
+    "request": {
+      "DbtrAcct_Id": "FU29IEWS",
+      "CdtrAcct_Id": "19F4D86B",
+      "UltmtDbtr_Id": "V78UAD",
+      "UltmtCdtr_Id": "BZUM47",
+      "IntrBkSttlmAmt": 250799.11,
+      "Ccy": "INR",
+      "IntrBkSttlmDt": "2023-09-16",
+      "SttlmMtd": "INGA",
+      "identifier_type": "ACCT_IFSC",
+      "Dbtr_Nm": "Northwind Inc Services Trading",
+      "Cdtr_Nm": "Acme LLC Trading Holdings",
+      "UltmtDbtr_Nm": "Northwind Inc Services",
+      "UltmtCdtr_Nm": "Acme LLC Trading",
+      "Dbtr_Ctry": "IN",
+      "Cdtr_Ctry": "IN",
+      "Dbtr_Industry": "Technology",
+      "Cdtr_Industry": "Energy",
+      "Dbtr_SubIndustry": "Hardware",
+      "Cdtr_SubIndustry": "Oil"
+    },
+    "response": {
+      "rail_pred": "RTGS",
+      "rail_conf": 0.812,
+      "status_pred": "REJECTED",
+      "eta_min_pred": 28.3,
+      "risk_pred": "High",
+      "geography_pred": "Asia",
+      "expense_pred": "Capital",
+      "top_exception_risks": [
+        {
+          "code": "fraud_hold",
+          "score": 0.04
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "below_min",
+          "score": 0.04
+        }
+      ]
+    },
+    "truth": {
+      "rail": "RTGS",
+      "terminal_status": "STP"
+    }
+  },
+  "uc3_cross_border_swift": {
+    "request": {
+      "DbtrAcct_Id": "17K0Z5Q2",
+      "CdtrAcct_Id": "RZVADW30",
+      "UltmtDbtr_Id": "HLG46O",
+      "UltmtCdtr_Id": "PEZRUY",
+      "IntrBkSttlmAmt": 248883.99,
+      "Ccy": "INR",
+      "IntrBkSttlmDt": "2023-01-24",
+      "SttlmMtd": "COVE",
+      "identifier_type": "BIC_IBAN",
+      "Dbtr_Nm": "Solstice SA Services Ops",
+      "Cdtr_Nm": "Solstice GmbH Sales Trading",
+      "UltmtDbtr_Nm": "Solstice SA Services",
+      "UltmtCdtr_Nm": "Solstice GmbH Sales",
+      "Dbtr_Ctry": "IN",
+      "Cdtr_Ctry": "BR",
+      "Dbtr_Industry": "Energy",
+      "Cdtr_Industry": "Consumer",
+      "Dbtr_SubIndustry": "Utilities",
+      "Cdtr_SubIndustry": "Apparel"
+    },
+    "response": {
+      "rail_pred": "SWIFT",
+      "rail_conf": 1.0,
+      "status_pred": "REJECTED",
+      "eta_min_pred": 878.2,
+      "risk_pred": "High",
+      "geography_pred": "Asia",
+      "expense_pred": "Capital",
+      "top_exception_risks": [
+        {
+          "code": "sanctions_hit",
+          "score": 0.05
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "settlement_fail",
+          "score": 0.03
+        }
+      ]
+    },
+    "truth": {
+      "rail": "SWIFT",
+      "terminal_status": "STP"
+    }
+  },
+  "uc4_misrouted_below_floor": {
+    "request": {
+      "DbtrAcct_Id": "CF770EJF",
+      "CdtrAcct_Id": "JI1OIJYT",
+      "UltmtDbtr_Id": "2NWCUR",
+      "UltmtCdtr_Id": "315TLI",
+      "IntrBkSttlmAmt": 7409.86,
+      "Ccy": "INR",
+      "IntrBkSttlmDt": "2023-03-19",
+      "SttlmMtd": "INGA",
+      "identifier_type": "ACCT_IFSC",
+      "Dbtr_Nm": "Plantations Ltd Services Trading",
+      "Cdtr_Nm": "Acme Inc Capital Sales",
+      "UltmtDbtr_Nm": "Plantations Ltd Services",
+      "UltmtCdtr_Nm": "Acme Inc Capital",
+      "Dbtr_Ctry": "IN",
+      "Cdtr_Ctry": "IN",
+      "Dbtr_Industry": "Communications",
+      "Cdtr_Industry": "Communications",
+      "Dbtr_SubIndustry": "Telecom",
+      "Cdtr_SubIndustry": "Telecom"
+    },
+    "response": {
+      "rail_pred": "NEFT",
+      "rail_conf": 0.631,
+      "status_pred": "REJECTED",
+      "eta_min_pred": 235.6,
+      "risk_pred": "Low",
+      "geography_pred": "Asia",
+      "expense_pred": "Operational",
+      "top_exception_risks": [
+        {
+          "code": "below_min",
+          "score": 0.06
+        },
+        {
+          "code": "sanctions_hit",
+          "score": 0.04
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        }
+      ]
+    },
+    "truth": {
+      "rail": "RTGS",
+      "terminal_status": "REJECTED"
+    }
+  },
+  "uc5_cold_start": {
+    "request": {
+      "DbtrAcct_Id": "ZZNEW0001",
+      "CdtrAcct_Id": "ZZNEW0002",
+      "UltmtDbtr_Id": "ZZNEW1",
+      "UltmtCdtr_Id": "ZZNEW2",
+      "IntrBkSttlmAmt": 832.91,
+      "Ccy": "INR",
+      "IntrBkSttlmDt": "2023-11-30",
+      "SttlmMtd": "CLRG",
+      "identifier_type": "ACCT_IFSC",
+      "Dbtr_Nm": "Brand New Trading Co",
+      "Cdtr_Nm": "Unknown Beneficiary Ltd",
+      "UltmtDbtr_Nm": "Granite GmbH Capital",
+      "UltmtCdtr_Nm": "Harbor Inc Sales",
+      "Dbtr_Ctry": "IN",
+      "Cdtr_Ctry": "IN",
+      "Dbtr_Industry": "Communications",
+      "Cdtr_Industry": "Energy",
+      "Dbtr_SubIndustry": "Media",
+      "Cdtr_SubIndustry": "Renewables"
+    },
+    "response": {
+      "rail_pred": "NEFT",
+      "rail_conf": 0.001,
+      "status_pred": "REPAIRED",
+      "eta_min_pred": 1360.6,
+      "risk_pred": "Medium",
+      "geography_pred": "Asia",
+      "expense_pred": "Other",
+      "top_exception_risks": [
+        {
+          "code": "sanctions_hit",
+          "score": 0.1
+        },
+        {
+          "code": "missing_field",
+          "score": 0.07
+        },
+        {
+          "code": "fx_fail",
+          "score": 0.05
+        }
+      ]
+    },
+    "truth": {
+      "note": "all-new accounts; no truth - the point is the confidence"
+    }
+  },
+  "uc6_explain_swift": {
+    "request": "uc3 payment + explain:true",
+    "response": {
+      "rail_pred": "SWIFT",
+      "rail_conf": 1.0,
+      "status_pred": "REJECTED",
+      "eta_min_pred": 878.2,
+      "risk_pred": "High",
+      "geography_pred": "Asia",
+      "expense_pred": "Capital",
+      "top_exception_risks": [
+        {
+          "code": "sanctions_hit",
+          "score": 0.05
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "settlement_fail",
+          "score": 0.03
+        }
+      ],
+      "drivers": [
+        {
+          "field": "identifier_type",
+          "rail_impact": 0.2905,
+          "risk_impact": 0.5831,
+          "eta_impact_min": 197.1
+        },
+        {
+          "field": "Ccy",
+          "rail_impact": 0.4739,
+          "risk_impact": -0.2017,
+          "eta_impact_min": 119.9
+        },
+        {
+          "field": "IntrBkSttlmAmt",
+          "rail_impact": -0.0059,
+          "risk_impact": 0.5572,
+          "eta_impact_min": -276.9
+        },
+        {
+          "field": "IntrBkSttlmDt",
+          "rail_impact": -0.0048,
+          "risk_impact": -0.2776,
+          "eta_impact_min": -114.6
+        },
+        {
+          "field": "UltmtCdtr_Id",
+          "rail_impact": -0.0034,
+          "risk_impact": 0.1949,
+          "eta_impact_min": -107.8
+        }
+      ]
+    }
+  },
+  "uc7_inflight_fresh": {
+    "request_msgs": [
+      "pacs.008(None)"
+    ],
+    "response": {
+      "end_to_end_id": "E2E-00020000",
+      "n_msgs": 1,
+      "last_msg_type": "pacs.008",
+      "booked_proba": 0.9571,
+      "settlement_outcome": {
+        "MANUAL_REVIEW": 0.0739,
+        "REJECTED": 0.0248,
+        "REPAIRED": 0.1538,
+        "STP": 0.7475
+      },
+      "eta_remaining_min": 1.0,
+      "reject_reason_if_failed": {
+        "code": "ED05",
+        "score": 0.5882
+      },
+      "cancel_proba": 0.0259,
+      "return_proba": 0.0063
+    }
+  },
+  "uc8_inflight_troubled": {
+    "request_msgs": [
+      "pacs.008(None)",
+      "pacs.002(ACSC)",
+      "camt.054(BOOK)",
+      "camt.056(None)",
+      "camt.029(CNCL)",
+      "pacs.004(None)"
+    ],
+    "response": {
+      "end_to_end_id": "E2E-00020005",
+      "n_msgs": 6,
+      "last_msg_type": "pacs.004",
+      "booked_proba": 0.8522,
+      "settlement_outcome": {
+        "MANUAL_REVIEW": 0.0057,
+        "REJECTED": 0.0575,
+        "REPAIRED": 0.1289,
+        "STP": 0.808
+      },
+      "eta_remaining_min": 1.5,
+      "reject_reason_if_failed": {
+        "code": "AC04",
+        "score": 0.9665
+      },
+      "cancel_proba": 0.044,
+      "return_proba": 0.0625
+    }
+  },
+  "uc9_velocity": {
+    "request": "per-account history rows (engine-supplied)",
+    "bursting": {
+      "actor": "1RR9184S",
+      "n_txns": 6,
+      "burst_proba": 0.5,
+      "burst_rule": 0
+    },
+    "quiet": {
+      "actor": "001IR497",
+      "n_txns": 6,
+      "burst_proba": 0.0,
+      "burst_rule": 0
+    }
+  },
+  "uc10_forecast_next": {
+    "request": "history of one salaried + one irregular customer",
+    "salary_account": "F1BBU9MT",
+    "irregular_account": "KNAGDL0J",
+    "response": [
+      {
+        "actor": "F1BBU9MT",
+        "n_history": 20,
+        "next_event_proba": 0.75,
+        "expected_gap_days": 9.9,
+        "expected_amount": 49204.2617,
+        "top_payee_hint": "NU5WVQSZ",
+        "horizon_days": 35
+      },
+      {
+        "actor": "KNAGDL0J",
+        "n_history": 12,
+        "next_event_proba": 0.6103,
+        "expected_gap_days": 26.1,
+        "expected_amount": 13660.1797,
+        "top_payee_hint": "X09NS2VJ",
+        "horizon_days": 35
+      }
+    ]
+  },
+  "uc11_liquidity": {
+    "request": "the day's book: 100 outward payments",
+    "response": {
+      "model": "model_india",
+      "buckets": [
+        "<1m",
+        "1-15m",
+        "15-60m",
+        "60-240m",
+        "240-1440m",
+        ">1440m"
+      ],
+      "by_rail": {
+        "IMPS": [
+          37050.91,
+          0.0,
+          3975.88,
+          14208.57,
+          176610.42,
+          51850.99
+        ],
+        "NEFT": [
+          113832.09,
+          178928.58,
+          0.0,
+          54790.55,
+          602484.36,
+          62716.79
+        ],
+        "RTGS": [
+          0.0,
+          0.0,
+          250799.11,
+          0.0,
+          436447.05,
+          200199.28
+        ],
+        "SWIFT": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1093808.58,
+          380952.58
+        ]
+      },
+      "total": [
+        150883.0,
+        178928.58,
+        254774.99,
+        68999.12,
+        2309350.41,
+        695719.64
+      ],
+      "n_payments": 100,
+      "total_amount": 3658655.74
+    }
+  }
+}

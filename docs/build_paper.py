@@ -4,6 +4,7 @@ Regenerate with:  python docs/build_paper.py
 Every number is the measured one from the H200 full runs (results_*.json,
 RESULTS.md, docs/V2_DIRECTION.md). No number in this paper is aspirational.
 """
+import json
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -12,7 +13,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    HRFlowable, PageBreak, Paragraph, Preformatted, SimpleDocTemplate, Spacer,
+    Table, TableStyle,
 )
 
 OUT = Path(__file__).resolve().parent / "TXN_REPR_PAPER.pdf"
@@ -46,6 +48,9 @@ CELLH = ParagraphStyle("CELLH", parent=CELL, textColor=colors.white,
                        fontName="Helvetica-Bold")
 CAP = ParagraphStyle("CAP", parent=ss["Normal"], fontSize=8.3, leading=11,
                      textColor=MUTED, alignment=TA_JUSTIFY, spaceAfter=8)
+PRE = ParagraphStyle("PRE", parent=ss["Code"], fontName="Courier", fontSize=6.8,
+                     leading=8.4, textColor=INK, backColor=colors.HexColor("#f4f5f7"),
+                     borderColor=LINE, borderWidth=0.4, borderPadding=4, spaceAfter=6)
 
 story = []
 
@@ -383,6 +388,84 @@ body("PULSE's frozen encoder does carry many payment decisions - provided one is
      "expensive component the source architecture allows, contributes 1.3 points and "
      "was removed from serving (C5). The claims ledger, generators, and 197 tests "
      "reproduce every number in this paper from two commands.")
+
+# ====================================================== ANNEXURE A
+_annex = Path(__file__).resolve().parent / "annex_capture.json"
+if _annex.exists():
+    A = json.loads(_annex.read_text())
+
+    def pre(obj, keys=None):
+        if keys:
+            obj = {k: obj[k] for k in keys if k in obj}
+        story.append(Preformatted(json.dumps(obj, indent=1, default=str), PRE))
+
+    story.append(PageBreak())
+    h2("Annexure A&nbsp;&nbsp;Live API round-trips")
+    body("Every block below is a real request/response pair captured against the served "
+         "bundle (api_india:app, GPU-trained heads, isotonic-calibrated). The scenarios "
+         "were picked to be distinct, and two of them are deliberate stress cases: a "
+         "mis-routed payment and a pair of accounts the model has never seen. "
+         "docs/annex_capture.json holds the unabridged captures; the capture script "
+         "reruns them against any bundle.")
+
+    h3("A.1&nbsp;&nbsp;Intake: POST /score/intake - five scenarios, one endpoint")
+    body("The first request is shown in full; the rest send the same 19 fields with "
+         "different values. Ground truth from the held-out generator run appears with "
+         "each response - misses included.")
+    body("<b>UC-1, small domestic transfer</b> (833 INR, known accounts). True rail IMPS, "
+         "true status STP:")
+    pre({"request": A["uc1_small_domestic"]["request"],
+         "response": A["uc1_small_domestic"]["response"]})
+    body("<b>UC-2, high-value domestic</b> (250,799 INR). Rail and risk correct (RTGS "
+         "0.812, High); the status head calls REJECTED where truth is STP - the weak head "
+         "of Table 2, shown failing:")
+    pre(A["uc2_high_value_rtgs"]["response"])
+    body("<b>UC-3, cross-border</b> (BIC/IBAN, COVE settlement, IN -&gt; BR). SWIFT at "
+         "confidence 1.00; ETA 878 min against a true settle time of 1,140:")
+    pre(A["uc3_cross_border_swift"]["response"])
+    body("<b>UC-4, mis-routed below the RTGS floor</b> (7,410 INR arrives tagged RTGS; "
+         "the 2-lakh floor makes it invalid). The model re-routes to NEFT and predicts "
+         "the reject - both correct:")
+    pre(A["uc4_misrouted_below_floor"]["response"])
+    body("<b>UC-5, cold start</b> (every account id brand new). The confidence collapse "
+         "is the documented behaviour, and the reason routing confidence is part of the "
+         "response contract - a gateway should treat 0.001 as 'do not trust this rail "
+         "call':")
+    pre(A["uc5_cold_start"]["response"])
+
+    h3("A.2&nbsp;&nbsp;Explanations: explain:true - column-occlusion drivers")
+    body("Drivers for UC-3. identifier_type (BIC_IBAN) carries most of the risk call; "
+         "currency and settlement method carry the rail call. Occlusion is faithful to "
+         "the frozen encoder by construction - no post-hoc surrogate model:")
+    pre(A["uc6_explain_swift"]["response"].get("drivers", []))
+
+    h3("A.3&nbsp;&nbsp;In-flight: POST /score/inflight - healthy vs troubled lifecycle")
+    body("UC-7 scores a payment from its first visible message only. UC-8 scores a "
+         "lifecycle that went wrong end to end: settled (pacs.002 ACSC), booked "
+         "(camt.054), then a recall (camt.056), the recall resolution (camt.029 CNCL) "
+         "and the return of funds (pacs.004). Return probability rises tenfold over the "
+         "healthy case and the conditional reject reason snaps to AC04 (account "
+         "closed) at 0.97:")
+    pre({"UC7_prefix": A["uc7_inflight_fresh"]["request_msgs"],
+         "UC7_response": A["uc7_inflight_fresh"]["response"]})
+    pre({"UC8_prefix": A["uc8_inflight_troubled"]["request_msgs"],
+         "UC8_response": A["uc8_inflight_troubled"]["response"]})
+
+    h3("A.4&nbsp;&nbsp;Behaviour and treasury: velocity, next-payment, liquidity")
+    body("UC-9 sends two engine-supplied account histories to POST /score/velocity; the "
+         "burst score separates them while the transparent gap rule (returned alongside "
+         "for comparison) fires on neither. UC-10 sends a salaried customer and an "
+         "irregular one to POST /forecast/next - the cadence account gets the higher "
+         "occurrence probability and the shorter expected gap. UC-11 sends the day's "
+         "100-payment book to POST /forecast/liquidity and receives the outflow curve "
+         "by rail and settlement-time bucket; bucket sums equal the book total by "
+         "construction:")
+    pre({"UC9_velocity": {"bursting": A["uc9_velocity"]["bursting"],
+                          "quiet": A["uc9_velocity"]["quiet"]}})
+    pre({"UC10_forecast_next": A["uc10_forecast_next"]["response"]})
+    _liq = dict(A["uc11_liquidity"]["response"])
+    _liq.pop("model", None)
+    pre({"UC11_liquidity": _liq})
 
 # ====================================================== REFERENCES
 h2("References")
