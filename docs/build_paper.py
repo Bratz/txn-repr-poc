@@ -268,6 +268,43 @@ body("Twenty thousand payments across RTGS, NEFT, IMPS, and SWIFT, each expanded
      "same generator (salary, rent, utility, supplier schedules) supports the forecasting "
      "heads.")
 
+h3("3.4&nbsp;&nbsp;How the generators work")
+body("All three corpora come from the same recipe, and the recipe is the falsifiability "
+     "tool: because every label has a known cause, a claim can fail loudly. Generation "
+     "runs in five steps. First, an account universe: 4,000 synthetic corporates with "
+     "industries, countries, and account/IFSC/BIC identifiers (20,000 parents at the "
+     "1M-row scale). Second, payments: amount and scope select the eligible rail - "
+     "2 lakh INR unlocks RTGS, amounts at or under 5 lakh allow IMPS, cross-border "
+     "routes to SWIFT - and a deliberate slice arrives mis-routed so the routing head "
+     "has something real to correct. Third, exceptions: a hazard model injects sixteen "
+     "exception types (sanctions holds, liquidity shortfalls, format errors, and so on) "
+     "at specific lifecycle steps, and terminal status, settlement time, and charges "
+     "follow from the exception path and the rail's service curve. Fourth, lifecycle "
+     "expansion: each payment becomes its ISO 20022 message trail, with timestamps "
+     "anchored to the injected events rather than interpolated - a return leg lands 60 "
+     "minutes after its cause, a recall 240. Fifth, planted couplings: 3% of payments "
+     "receive cancellation requests, origination-context account-takeover risk is "
+     "coupled (roughly eightfold) to later recalls, and an optional cadence mixture "
+     "(salary, rent, utility monthly; supplier weekly) gives the forecasting heads a "
+     "periodicity to find. Every generator is seeded: the same command produces "
+     "byte-identical corpora on any machine, which is what lets a single results file "
+     "stand as the record.")
+h3("3.5&nbsp;&nbsp;What a deployment must supply")
+body("The serving contract is deliberately narrow. Intake scoring needs nineteen fields "
+     "a payments engine already holds at acceptance: debtor and creditor accounts, "
+     "ultimate parties, amount and currency, settlement date and method, identifier "
+     "type, party names, countries, and industry codes. In-flight scoring needs the "
+     "message trail so far - end-to-end id, sequence number, message type, transaction "
+     "status, and minute offsets - which is the engine's own event log. The behavioural "
+     "endpoints (velocity, next-payment) are stateless: the engine sends each account's "
+     "recent history (two or more rows for velocity, three or more for forecasting) and "
+     "PULSE holds nothing between calls, which keeps the model out of the data-retention "
+     "conversation. The origination fusion path additionally reads the bank's own "
+     "channel-layer attributes at pain.001 time - channel, device, session, and "
+     "authentication signals that exist before any ISO message does. Nothing in the "
+     "contract requires enrichment beyond what the engine and channel layer already "
+     "produce.")
+
 # ====================================================== 4 ARCHITECTURE
 h2("4&nbsp;&nbsp;Architecture")
 body("The pinned encoder follows the source paper: each column embeds as one token "
