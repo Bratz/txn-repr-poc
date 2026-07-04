@@ -27,20 +27,22 @@ the same gap multiset and amount distribution, so every order-invariant aggregat
 only a model that reads the ordered, timed sequence can separate them. On that data, the smoke
 run gives (held-out accounts, prevalence ~0.44):
 
-| Claim | Smoke (MockLLM, tiny enc) | FULL (25M enc, 40k rows) | Threshold | Verdict |
+| Claim | Smoke (MockLLM, tiny enc) | FULL (25M enc, full corpus, H200) | Threshold | Verdict |
 |---|---|---|---|---|
-| C3 temporal lift (sequence vs order-blind pooled) | +27.7 pp (0.79 vs 0.51) | **+50.1 pp (0.963 vs 0.462)** | `>= +10 pp` | **pass** |
-| C4 held-out gen. (sequence vs CatBoost on aggregates) | +31.2 pp (0.79 vs 0.48) | **+48.3 pp (0.963 vs 0.480)** | `>= +5 pp` | **pass** |
-| Velocity burst (time-aware vs order-blind) | +44.4 pp | **+64.7 pp (0.852 vs 0.205)** | — | timing-only signal |
-| C5 LLM necessity (Option A probe vs Option B LLM) | A 0.79 vs B 0.56 (**MockLLM**) | **PENDING** — real-Phi run OOMs on the 16GB dev box (fp32 AND bf16; needs ~4-6GB free); retry armed | drop if B within 2pp of A | mock says **drop LLM** (−13 pp); not yet Phi-verified |
+| C3 temporal lift (sequence vs order-blind pooled) | +27.7 pp (0.79 vs 0.51) | **+38.5 pp (0.919 vs 0.533)** | `>= +10 pp` | **pass** |
+| C4 held-out gen. (sequence vs CatBoost on aggregates) | +31.2 pp (0.79 vs 0.48) | **+41.3 pp (0.919 vs 0.506)** | `>= +5 pp` | **pass** |
+| Velocity burst (time-aware vs order-blind) | +44.4 pp | **+60.0 pp (0.822 vs 0.222)** | — | timing-only signal |
+| C5 LLM necessity (Option A probe vs Option B real Phi-1.5 + adapters) | A 0.79 vs B 0.56 (**MockLLM**) | **A 0.919 vs B 0.932 (+1.3 pp for the LLM)** | drop if B within 2pp of A | **drop LLM** — 7.6M adapter params + Phi inference buy +1.3 pp |
 
 C4 is the first result in the project where the learned representation beats the gradient-boosted
 baseline - because the signal is genuinely temporal and the aggregates are matched, so the tree
-sits at chance. Full-run numbers (results_seq_full.json, seeded/reproducible; claim inputs
-preserved in data/_c5_reps.npz) are substantially STRONGER than smoke. Remaining caveats: C5 is
-mock-verified only until the real-Phi Option B completes (transformers pinned to 4.44.2 — 5.x
-segfaults Phi CPU forwards; the load itself needs a freer-memory window). The regime is synthetic
-order-structure; real behavioural data is the next wall.
+sits at chance. FULL numbers are the canonical GPU run on the whole §7 corpus (24,016 sequences,
+4,803 held-out actors, prevalence 0.45; results_seq_full.json, seeded/reproducible). An earlier
+interim 40k-row CPU slice gave higher lifts (C3 +50.1, C4 +48.3, velocity +64.7) — smaller eval
+set, same conclusions; the full-corpus numbers supersede it. C5 is now measured with real Phi-1.5:
+the frozen LLM + adapters edges the linear probe by +1.3 pp, under the 2 pp bar — the probe keeps
+~98.6% of the LLM path's PR-AUC with none of its cost, so the LLM is dropped from serving. The
+regime is synthetic order-structure; real behavioural data is the next wall.
 
 ---
 

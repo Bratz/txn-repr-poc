@@ -321,6 +321,8 @@ def save_india_model(save_dir, *, enc_cfg, vocabs, quantizer, encoder, schema, p
         "tasks": list(probes.get("tasks", {})),
         "inflight": "inflight" in probes,
         "velocity": velocity is not None and velocity["head"] is not None,
+        "next": "next" in probes,
+        "calibrated": "exc_cal" in probes,
         "hidden": enc_cfg.hidden,
     }, indent=2))
     return save_dir
