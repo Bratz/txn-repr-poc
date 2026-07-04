@@ -58,6 +58,13 @@ def test_api_endpoints_roundtrip(tmp_path, monkeypatch):
             assert x["eta_remaining_min"] >= 0
             assert x["settlement_outcome"] is None or isinstance(x["settlement_outcome"], dict)
 
+        nx = c.post("/forecast/next",
+                    json={"transactions": json.loads(pay.head(200).to_json(orient="records"))})
+        assert nx.status_code in (200, 409)        # 409 if tiny bundle lacks next heads
+        if nx.status_code == 200:
+            for x in nx.json()["results"]:
+                assert 0.0 <= x["next_event_proba"] <= 1.0
+
         lf = c.post("/forecast/liquidity",
                     json={"payments": json.loads(pay.head(50).to_json(orient="records"))})
         assert lf.status_code == 200

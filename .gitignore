@@ -56,3 +56,4 @@ results_msgseq.json
 *.npz
 results_seq_full.json
 results_origination.json
+results_next.json

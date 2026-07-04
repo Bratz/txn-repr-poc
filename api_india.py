@@ -111,6 +111,23 @@ def score_intake(req: IntakeRequest):
     return {"model": _meta.get("model_dir"), "results": recs}
 
 
+@app.post("/forecast/next")
+def forecast_next(req: VelocityRequest):
+    """Next-payment forecast per account from its recent history (engine-supplied):
+    probability of another payment within the trained horizon, expected gap and amount,
+    and the most-frequent-payee hint."""
+    df = pd.DataFrame(req.transactions)
+    need = {"DbtrAcct_Id", "CdtrAcct_Id", "IntrBkSttlmDt"}
+    if need - set(df.columns):
+        raise HTTPException(422, f"transactions need columns: {sorted(need)}")
+    try:
+        res = _scorer.predict_next(df)
+    except SystemExit as e:
+        raise HTTPException(409, str(e))
+    return {"model": _meta.get("model_dir"),
+            "results": [_clean(r) for r in res.to_dict(orient="records")]}
+
+
 @app.post("/forecast/liquidity")
 def forecast_liquidity(req: IntakeRequest):
     """Treasury outflow curve: rail x settlement-time bucket, aggregated from per-payment

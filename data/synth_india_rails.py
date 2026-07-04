@@ -147,6 +147,12 @@ class IndiaConfig:
     # account HISTORY predictive power over the next payment's outcome - the data change the
     # sequence-encoder eval needs. DEFAULT 0.0 = off: published artifacts stay byte-identical.
     exception_momentum: float = 0.0
+    # CADENCE hook: fraction of domestic accounts that carry STANDING PATTERNS (salary credit,
+    # rent/EMI, utility, weekly supplier) - periodic dates + stable amounts + fixed
+    # counterparties. This is what makes next-payment/receipt prediction learnable: the
+    # default uniform-random dates carry no periodicity at all. DEFAULT 0.0 = off:
+    # published artifacts stay byte-identical.
+    cadence_frac: float = 0.0
     inward_fraction: float = 0.45
     # domestic rails enabled for this run. UPI is off by default for now (reversible - the
     # registry still defines it); set to include "UPI" to bring the fourth rail back.
@@ -323,17 +329,146 @@ def _route_domestic(amount, rng, cfg):
     return rail, sample_identifier(rail, rng)
 
 
+def _cadence_payments(cfg, rng, in_accs, start):
+    """Standing patterns for a fraction of accounts -> list of scheduled payment dicts.
+
+    salary   monthly INWARD credit (fixed employer, fixed day, amount +-1%)
+    rent     monthly outward (fixed payee, fixed day, amount +-2%)
+    utility  monthly outward (fixed payee, day +-3, amount +-10%)
+    supplier weekly outward (fixed payee, 7d +-1, amount +-5%)
+    """
+    n_in = len(in_accs)
+    n_sel = int(n_in * cfg.cadence_frac)
+    sel = rng.choice(n_in, size=n_sel, replace=False) if n_sel else []
+    months = max(1, cfg.horizon_days // 30)
+    out = []
+
+    def _emit(pattern, src, dest, base, jitter, period, day_jitter):
+        day = int(rng.integers(1, 28))
+        t = day
+        for k in range(months * (30 // period)):
+            d = start + timedelta(days=int(t + rng.integers(-day_jitter, day_jitter + 1))
+                                  if day_jitter else int(t))
+            if (d - start).days >= cfg.horizon_days:
+                break
+            amt = round(float(base * (1 + rng.normal(0, jitter))), 2)
+            out.append({"src": src, "dest": dest, "amount": max(100.0, amt),
+                        "dte": d.isoformat(), "cadence": pattern})
+            t += period
+    for i in sel:
+        me = in_accs[int(i)]
+        pats = rng.choice(["salary", "rent", "utility", "supplier"],
+                          size=int(rng.integers(1, 4)), replace=False)
+        for p in pats:
+            other = in_accs[int(rng.integers(n_in))]
+            if other.account_id == me.account_id:
+                continue
+            if p == "salary":
+                _emit("salary", other, me, float(rng.uniform(50_000, 200_000)), 0.01, 30, 0)
+            elif p == "rent":
+                _emit("rent", me, other, float(rng.uniform(10_000, 50_000)), 0.02, 30, 0)
+            elif p == "utility":
+                _emit("utility", me, other, float(rng.uniform(500, 5_000)), 0.10, 30, 3)
+            else:
+                _emit("supplier", me, other, float(rng.uniform(5_000, 100_000)), 0.05, 7, 1)
+    rng.shuffle(out)
+    # cap so ad-hoc payments still exist alongside the standing ones
+    return out[: int(cfg.num_payments * 0.7)]
+
+
+def _finish_row(row, pid, rail, identifier, amount, xborder, direction, status,
+                events, exceptions, seconds, src, dest, cfg, rng, cadence="none"):
+    """Shared per-payment labelling: rail/instrument metadata, amount split (FX + charges),
+    mis-routed flag, reject reason, cancellation/return legs, exception flags, cadence."""
+    row["payment_id"] = pid
+    row["rail"] = rail
+    row["identifier_type"] = identifier
+    row["settlement_kind"] = RAILS[rail].settlement
+    row["cadence"] = cadence
+    # amount split (Track D P1): settlement leg untouched; instructed leg via FX + charges.
+    # fx_rate is market noise (unpredictable); charges is bps-of-amount (regression target).
+    counter_ccy = dest.currency
+    if src.currency == counter_ccy:                          # domestic / same currency
+        fx_rate = 1.0
+        charges = min(25.0, max(5.0, row["IntrBkSttlmAmt"] * 0.0005))
+    else:                                                    # cross-border FX
+        fx_rate = round(float(np.exp(rng.normal(0.0, 0.4))), 4)
+        charges = row["IntrBkSttlmAmt"] * float(rng.uniform(0.001, 0.005)) + 500.0
+    row["InstdCcy"] = counter_ccy
+    row["InstdAmt"] = round(row["IntrBkSttlmAmt"] * fx_rate, 2)
+    row["fx_rate"] = fx_rate
+    row["charges"] = round(charges, 2)
+    # mis-routed = the ATTEMPTED rail isn't eligible (injected over-cap / under-min rows).
+    _id = identifier if identifier in IDENTIFIER_TYPES else None
+    row["is_mis_routed"] = int(rail not in eligible_rails(amount, _id, xborder))
+    row["direction"] = direction
+    row["terminal_status"] = status
+    # ISO status-reason code; only non-settled payments carry one.
+    halt_exc = next((e[1] for e in reversed(events) if e[1] in exceptions), None)
+    halt_step = next((e[0] for e in reversed(events) if e[1] in exceptions), None)
+    row["reject_reason"] = (LIFE_REASON.get(halt_exc, "NARR")
+                            if status in ("REJECTED", "MANUAL_REVIEW") else "none")
+    # cancellation (camt.056) + return (pacs.004) labels; recallable once past submission.
+    reached_clearing = not (status == "REJECTED" and halt_step in PRE_SUBMISSION)
+    p_cancel = cfg.cancel_frac * (1 + 2 * int(amount > 1_000_000)
+                                  + int("fraud_hold" in exceptions))
+    cancel_requested = reached_clearing and rng.random() < min(p_cancel, 0.5)
+    cancel_status = "none"
+    if cancel_requested:
+        if status == "MANUAL_REVIEW":                 # held -> easy to stop, never credited
+            cancel_status = "CNCL"
+        elif status in ("STP", "REPAIRED"):           # already credited -> recall may be late
+            cancel_status = "CNCL" if rng.random() < 0.35 else "RJCR"
+        else:                                         # REJECTED -> nothing to recall
+            cancel_status = "CNCL"
+    auto_return = status == "REJECTED" and halt_exc == "account_closed"
+    recall_return = cancel_requested and cancel_status == "CNCL" and status in ("STP", "REPAIRED")
+    row["cancel_requested"] = int(cancel_requested)
+    row["cancel_status"] = cancel_status
+    row["returned"] = int(auto_return or recall_return)
+    row["return_reason"] = (LIFE_REASON["account_closed"] if auto_return
+                            else ("CUST" if recall_return else "none"))
+    row["time_to_settle_min"] = round(seconds / 60.0, 3)
+    for code in EXCEPTION_CODES:
+        row[f"exc_{code}"] = int(code in exceptions)
+    return row
+
+
 def build_dataset(cfg: IndiaConfig):
     rng = np.random.default_rng(cfg.seed)
     in_accs = india_accounts(rng, cfg.num_accounts, cfg.seed)
     fgn_accs = foreign_accounts(rng, max(1, cfg.num_accounts // 4), cfg.seed)
     start = date.fromisoformat(cfg.start_date)
     n_in, n_fgn = len(in_accs), len(fgn_accs)
+    scheduled = _cadence_payments(cfg, rng, in_accs, start) if cfg.cadence_frac > 0 else []
 
     pay_rows, evt_rows = [], []
     acct_heat: dict = {}                    # account -> exception-momentum multiplier
     pid = 0
     while len(pay_rows) < cfg.num_payments:
+        if scheduled:                        # standing patterns first, then ad-hoc fill
+            s = scheduled.pop()
+            src, dest, amount, dte, cadence = s["src"], s["dest"], s["amount"], s["dte"], s["cadence"]
+            rail, identifier = _route_domestic(amount, rng, cfg)
+            direction = "inward" if cadence == "salary" else "outward"
+            heat = acct_heat.get(src.account_id, 1.0)
+            events, exceptions, status, seconds = simulate_payment(rail, src, dest, amount,
+                                                                   rng, heat=heat)
+            acct_heat[src.account_id] = (min(3.0, heat * (1 + cfg.exception_momentum))
+                                         if exceptions else 1.0 + (heat - 1.0) * 0.5)
+            row = project_to_pacs008(src, dest, amount, dte, RAIL_STTLM[rail],
+                                     assign_risk(src, dest, amount, rng),
+                                     assign_geo(src, dest), assign_expense(dest), "No", pid)
+            _finish_row(row, pid, rail, identifier, amount, False, direction, status,
+                        events, exceptions, seconds, src, dest, cfg, rng, cadence=cadence)
+            pay_rows.append(row)
+            for seq, (step, outcome, tsec) in enumerate(events):
+                evt_rows.append({"payment_id": pid, "seq": seq, "step": step,
+                                 "outcome": outcome,
+                                 "excode": outcome if outcome in EXCEPTION_CODES else "none",
+                                 "rail": rail, "t_min": round(tsec / 60.0, 3)})
+            pid += 1
+            continue
         xborder = rng.random() < cfg.xborder_frac
         direction = "inward" if rng.random() < cfg.inward_fraction else "outward"
 
@@ -366,66 +501,8 @@ def build_dataset(cfg: IndiaConfig):
         row = project_to_pacs008(src, dest, amount, dte, RAIL_STTLM[rail],
                                  assign_risk(src, dest, amount, rng), assign_geo(src, dest),
                                  assign_expense(dest), "No", pid)
-        row["payment_id"] = pid
-        row["rail"] = rail
-        row["identifier_type"] = identifier
-        row["settlement_kind"] = RAILS[rail].settlement
-        # --- amount split: model the two-currency nature of cross-border + charges (Track D P1)
-        # IntrBkSttlmAmt/Ccy stay the interbank SETTLEMENT leg (as generated). We ADD the counter
-        # (instructed) leg via an FX rate, plus a charges fee. Domestic is 1:1 with a small flat
-        # fee. These are metadata/labels for a future FX/charges head - NOT encoder features yet,
-        # so no leakage into the numeric bucket. fx_rate is market noise (unpredictable); charges
-        # is bps-of-amount (a genuine regression target). Synthetic rate/fee - documented choice.
-        counter_ccy = dest.currency
-        if src.currency == counter_ccy:                          # domestic / same currency
-            fx_rate = 1.0
-            charges = min(25.0, max(5.0, row["IntrBkSttlmAmt"] * 0.0005))
-        else:                                                    # cross-border FX
-            fx_rate = round(float(np.exp(rng.normal(0.0, 0.4))), 4)
-            charges = row["IntrBkSttlmAmt"] * float(rng.uniform(0.001, 0.005)) + 500.0
-        row["InstdCcy"] = counter_ccy
-        row["InstdAmt"] = round(row["IntrBkSttlmAmt"] * fx_rate, 2)
-        row["fx_rate"] = fx_rate
-        row["charges"] = round(charges, 2)
-        # mis-routed = the ATTEMPTED rail isn't eligible for this payment (the injected
-        # over-cap / under-min cases). Their `rail` label is the attempt, not a valid route,
-        # so routing-accuracy should exclude them (they exist to generate the exceptions).
-        _id = identifier if identifier in IDENTIFIER_TYPES else None
-        row["is_mis_routed"] = int(rail not in eligible_rails(amount, _id, xborder))
-        row["direction"] = direction
-        row["terminal_status"] = status
-        # reject/hold reason as an ISO status-reason code (label for reason prediction).
-        # Only non-settled payments carry a reason; STP/REPAIRED settle cleanly -> "none".
-        halt_exc = next((e[1] for e in reversed(events) if e[1] in exceptions), None)
-        halt_step = next((e[0] for e in reversed(events) if e[1] in exceptions), None)
-        row["reject_reason"] = (LIFE_REASON.get(halt_exc, "NARR")
-                                if status in ("REJECTED", "MANUAL_REVIEW") else "none")
-
-        # --- cancellation (camt.056) + return (pacs.004) legs & labels --------------- #
-        # A payment is recallable once it reached interbank clearing (not pre-submission
-        # rejected). Recall probability is feature-modulated so it is learnable.
-        reached_clearing = not (status == "REJECTED" and halt_step in PRE_SUBMISSION)
-        p_cancel = cfg.cancel_frac * (1 + 2 * int(amount > 1_000_000)
-                                      + int("fraud_hold" in exceptions))
-        cancel_requested = reached_clearing and rng.random() < min(p_cancel, 0.5)
-        cancel_status = "none"
-        if cancel_requested:
-            if status == "MANUAL_REVIEW":                 # held -> easy to stop, never credited
-                cancel_status = "CNCL"
-            elif status in ("STP", "REPAIRED"):           # already credited -> recall may be late
-                cancel_status = "CNCL" if rng.random() < 0.35 else "RJCR"
-            else:                                         # REJECTED -> nothing to recall
-                cancel_status = "CNCL"
-        auto_return = status == "REJECTED" and halt_exc == "account_closed"
-        recall_return = cancel_requested and cancel_status == "CNCL" and status in ("STP", "REPAIRED")
-        row["cancel_requested"] = int(cancel_requested)
-        row["cancel_status"] = cancel_status
-        row["returned"] = int(auto_return or recall_return)
-        row["return_reason"] = (LIFE_REASON["account_closed"] if auto_return
-                                else ("CUST" if recall_return else "none"))
-        row["time_to_settle_min"] = round(seconds / 60.0, 3)
-        for code in EXCEPTION_CODES:
-            row[f"exc_{code}"] = int(code in exceptions)
+        _finish_row(row, pid, rail, identifier, amount, xborder, direction, status,
+                    events, exceptions, seconds, src, dest, cfg, rng)
         pay_rows.append(row)
 
         for seq, (step, outcome, tsec) in enumerate(events):

@@ -123,6 +123,26 @@ def test_save_load_predict_roundtrip(tmp_path):
     assert len(drv) == 2 and all(len(d) <= 4 for d in drv)
     assert {"field", "rail_impact", "risk_impact", "eta_impact_min"} <= set(drv[0][0])
 
+    # next-event forecast: heads reuse the velocity hist encoder; stateless serving
+    if vel is not None and vel["head"] is not None:
+        from encoder.history_encoder import HistoryConfig, HistoryEncoder
+        from serve_india import fit_next_heads
+        h = HistoryEncoder(vel["recon_fields"], HistoryConfig(**vel["hcfg"]))
+        h.load_state_dict(vel["state"]); h.freeze()
+        cad, _, _ = build_dataset(IndiaConfig(num_accounts=50, num_payments=900, seed=29,
+                                              cadence_frac=0.6))
+        nxt = fit_next_heads(enc, vocabs, h, cad, "cpu")
+        if nxt is not None and nxt["occurrence"] is not None:
+            s2 = IndiaScorer(enc, vocabs, {**probes, "next": nxt}, "cpu",
+                             hist=h, velocity_head=vel["head"])
+            fc = s2.predict_next(cad.head(300))
+            assert {"actor", "next_event_proba", "expected_gap_days",
+                    "expected_amount", "top_payee_hint"} <= set(fc.columns)
+            assert len(fc) and fc["next_event_proba"].between(0, 1).all()
+            assert (fc["expected_gap_days"] >= 0).all()
+            with pytest.raises(SystemExit):        # no heads -> loud failure
+                IndiaScorer(enc, vocabs, probes, "cpu", hist=h).predict_next(cad.head(300))
+
     # liquidity forecast: outflow buckets conserve the outward amount exactly
     fc = scorer.liquidity_forecast(pay.head(200))
     outward = pay.head(200)[pay.head(200)["direction"] == "outward"]

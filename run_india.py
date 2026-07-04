@@ -389,6 +389,17 @@ def main():
             num_payments=800 if args.smoke else 12000, seed=41))
         vel = fit_velocity(encoder, vocabs, dense, device,
                            hist_epochs=1 if args.smoke else 2)
+        if vel is not None:
+            # next-event heads reuse the SAME history encoder; fit on a cadence-enabled
+            # fleet (uniform-random dates carry no periodicity to forecast).
+            from encoder.history_encoder import HistoryConfig, HistoryEncoder
+            from serve_india import fit_next_heads
+            h = HistoryEncoder(vel["recon_fields"], HistoryConfig(**vel["hcfg"]))
+            h.load_state_dict(vel["state"]); h.freeze(); h.to(device)
+            cad, _, _ = build_dataset(IndiaConfig(
+                num_accounts=60 if args.smoke else 500,
+                num_payments=800 if args.smoke else 12000, seed=29, cadence_frac=0.5))
+            probes["next"] = fit_next_heads(encoder, vocabs, h, cad, device)
         path = save_india_model(args.save, enc_cfg=enc_cfg, vocabs=vocabs, quantizer=quantizer,
                                 encoder=encoder, schema=schema, probes=probes, velocity=vel)
         print(f"[save] model -> {path}")

@@ -42,6 +42,39 @@ _HIST = "hist.pt"
 # Velocity (per-account burst) - the v2 time-aware history encoder, served
 # --------------------------------------------------------------------------- #
 
+def fit_next_heads(encoder, vocabs, hist, pay, device, horizon_days=35, log=print):
+    """Fit the next-event heads (occurrence / gap / amount) on windowed history prefixes,
+    reusing the bundle's history encoder (one temporal encoder serves velocity AND
+    forecasting). Occurrence gets an isotonic calibrator from a held-out actor split.
+    Returns the heads dict for probes['next'], or None if the data has no usable windows.
+    """
+    from sklearn.linear_model import LogisticRegression, Ridge
+    from data.next_event import windowed_examples
+    from run_seq import encode_histories
+    seqs, lab = windowed_examples(pay, horizon_days=horizon_days)
+    if not len(lab):
+        log("[next] no windowed examples - heads skipped")
+        return None
+    e_all = torch.as_tensor(_embed_messages(encoder, vocabs, pay, device)).to(device)
+    H = encode_histories(hist, e_all, seqs, device).cpu().numpy()
+    actors = sorted(set(lab["actor"]))
+    rng = np.random.default_rng(0); rng.shuffle(actors)
+    ev_a = set(actors[: max(1, len(actors) // 5)])
+    ev = lab["actor"].isin(ev_a).to_numpy(); tr = ~ev
+    y = lab["has_next"].to_numpy()
+    occ = (LogisticRegression(max_iter=1000, class_weight="balanced").fit(H[tr], y[tr])
+           if len(set(y[tr].tolist())) > 1 else None)
+    cal = (_fit_iso(occ.predict_proba(H[ev])[:, 1], y[ev])
+           if occ is not None and len(set(y[ev].tolist())) > 1 else None)
+    unc = lab["gap_days"].notna().to_numpy()
+    gap = Ridge().fit(H[tr & unc], np.log1p(lab["gap_days"].to_numpy()[tr & unc]))
+    amt = Ridge().fit(H[tr & unc], np.log1p(lab["next_amount"].to_numpy()[tr & unc]))
+    log(f"[next] heads fit on {int(tr.sum()):,} windows "
+        f"(occurrence prevalence {y.mean():.2f}; horizon {horizon_days}d)")
+    return {"occurrence": occ, "occurrence_cal": cal, "gap": gap, "amount": amt,
+            "horizon_days": horizon_days}
+
+
 def fit_exception_calibration(probes, e_ev, pay_ev, log=print):
     """Isotonic calibrators for the per-exception intake probes, fit on held-out rows.
     Stored as probes['exc_cal']; predict() applies them when present."""
@@ -471,6 +504,50 @@ class IndiaScorer:
                              "n_txns": [len(s["pos"]) for s in seqs],
                              "burst_proba": np.round(proba, 4),
                              "burst_rule": rule.astype(int)})
+
+    def predict_next(self, txns_df, min_history=3):
+        """Next-event forecast per account from its recent payment rows (engine-supplied,
+        stateless - same pattern as predict_velocity). Per actor with >= min_history rows:
+        next_event_proba (calibrated, within the trained horizon), expected_gap_days,
+        expected_amount, and top_payee_hint (most-frequent counterparty - the transparent
+        baseline the deferred retrieval head must beat).
+        """
+        import pandas as pd
+        from run_seq import encode_histories
+        heads = self.probes.get("next")
+        if self.hist is None or not heads or heads.get("occurrence") is None:
+            raise SystemExit("this bundle has no next-event heads - refit with "
+                             "fit_next_heads (run_india.py --save on this revision+)")
+        df = txns_df.reset_index(drop=True)
+        dates = pd.to_datetime(df["IntrBkSttlmDt"])
+        e_all = torch.as_tensor(self._embed(df)).to(self.device)
+        from data.next_event import _seq
+        rows, seqs = [], []
+        for actor, idx in df.groupby("DbtrAcct_Id").groups.items():
+            pos = np.asarray(idx, dtype=np.int64)
+            pos = pos[np.argsort(dates.values[pos])]
+            if len(pos) < min_history:
+                continue
+            seqs.append(_seq(actor, pos[-64:], dates.values[pos[-64:]]))
+            vals, counts = np.unique(df["CdtrAcct_Id"].astype(str).to_numpy()[pos],
+                                     return_counts=True)
+            rows.append({"actor": actor, "n_history": int(len(pos)),
+                         "top_payee_hint": str(vals[counts.argmax()])})
+        if not rows:
+            return pd.DataFrame(columns=["actor", "n_history", "next_event_proba",
+                                         "expected_gap_days", "expected_amount",
+                                         "top_payee_hint"])
+        H = encode_histories(self.hist, e_all, seqs, self.device).cpu().numpy()
+        p = heads["occurrence"].predict_proba(H)[:, 1]
+        if heads.get("occurrence_cal") is not None:
+            p = heads["occurrence_cal"].predict(p)
+        out = pd.DataFrame(rows)
+        out["next_event_proba"] = np.round(p, 4)
+        out["expected_gap_days"] = np.round(np.expm1(heads["gap"].predict(H)).clip(0), 1)
+        out["expected_amount"] = np.round(np.expm1(heads["amount"].predict(H)).clip(0), 2)
+        out["horizon_days"] = heads["horizon_days"]
+        return out[["actor", "n_history", "next_event_proba", "expected_gap_days",
+                    "expected_amount", "top_payee_hint", "horizon_days"]]
 
     def liquidity_forecast(self, df, bucket_edges_min=(1, 15, 60, 240, 1440)):
         """Treasury view: expected OUTFLOW by rail x settlement-time bucket, aggregated from
