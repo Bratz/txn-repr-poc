@@ -1,5 +1,10 @@
 # Trained model
 
+> **Stale checkpoint.** The published weights predate the UPI removal and the
+> India-rails / lifecycle work — they score the original v1 §5 tasks only. The
+> current servable bundle is `model_india/` (built by `run_india.py --save`,
+> served by `serve_india.py` / `api_india.py`); republish before quoting this one.
+
 The full-run checkpoint (`model.pt`, ~979 MB) is too large for git, so the
 weights live on the **Hugging Face Hub**; this repo carries only the metadata
 (`model_meta.json`) and the loader (`predict.py`).
