@@ -43,12 +43,12 @@ def windowed_examples(pay: pd.DataFrame, actor_col="DbtrAcct_Id",
     data_end = dates.max()
     seqs, rows = [], []
 
-    def _emit(actor, hist_pos, ts_hist, has_next, gap, n_amt, n_payee):
+    def _emit(actor, hist_pos, ts_hist, has_next, gap, n_amt, n_payee, n_pos=-1):
         vals, counts = np.unique(payee[hist_pos], return_counts=True)
         seqs.append(seq_from_dates(actor, hist_pos, ts_hist))
         g = seqs[-1]["dt"][1:]
         rows.append({"actor": actor, "has_next": has_next, "gap_days": gap,
-                     "next_amount": n_amt, "next_payee": n_payee,
+                     "next_amount": n_amt, "next_payee": n_payee, "next_pos": int(n_pos),
                      "hist_gap_median": float(np.median(g)) if len(g) else np.nan,
                      "hist_gap_last": float(g[-1]) if len(g) else np.nan,
                      "hist_amount_median": float(np.median(amt[hist_pos])),
@@ -65,7 +65,7 @@ def windowed_examples(pay: pd.DataFrame, actor_col="DbtrAcct_Id",
             hist = pos[max(0, k - max_len):k]
             gap = float((ts[k] - ts[k - 1]) / np.timedelta64(1, "D"))
             _emit(actor, hist, dates[hist], int(gap <= horizon_days), gap,
-                  float(amt[pos[k]]), str(payee[pos[k]]))
+                  float(amt[pos[k]]), str(payee[pos[k]]), n_pos=pos[k])
         # censored negative: nothing arrived within a full horizon after the last event
         if float((data_end - ts[-1]) / np.timedelta64(1, "D")) >= horizon_days:
             hist = pos[-max_len:]
