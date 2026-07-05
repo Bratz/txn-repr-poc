@@ -62,6 +62,10 @@ python -u run_india.py --paper-serving --save model_india_paper --out results_in
 #    history encoder on the C3/C4 regime task (same corpus + actor split as run A).
 #    Within 5 pp of run A's h_USR probe -> the history encoder is deletable.
 python -u run_c7.py --out results_c7.json
+
+# H. C8 - the TransactionGPT tier: next-field heads + generative rollout on the
+#    cadence fleet. Pass = beat per-actor naives on >= 2 of 3 fields.
+python -u run_gen.py --out results_gen.json
 ```
 
 ## 4. Copy back
