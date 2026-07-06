@@ -181,7 +181,10 @@ story.append(Paragraph(
     "sharpens from 0.86 to 0.94 PR-AUC as messages arrive, and fusing pain.001 origination "
     "context lifts account-takeover detection from chance (0.03) to 1.00; message-order "
     "signal is a measured null (-0.5 points), and cancel/return heads sit at prevalence. "
-    "All data is synthetic and seeded; 197 tests reproduce every number.", ABS))
+    "Two follow-up interventions on the same frozen encoder - LoRA adapters (closing "
+    "40.7% of the tree gap) and full-token read-outs (+72%, still below the adapters) - "
+    "independently confirm that complete-row rule labels belong to the tree (C9, C10). "
+    "All data is synthetic and seeded; 209 tests reproduce every number.", ABS))
 story.append(Spacer(1, 4))
 story.append(HRFlowable(width="100%", thickness=0.6, color=LINE))
 
@@ -365,10 +368,17 @@ table(
         ["<b>C5</b> LLM necessity: frozen Phi-1.5 + adapters vs linear probe",
          "0.932 vs 0.919 (<b>+1.3 pp</b> for the LLM)",
          "drop the LLM if within 2 pp", "<b>drop the LLM</b>"],
+        ["<b>C9</b> adapter capacity: LoRA inside the frozen encoder vs probe vs "
+         "CatBoost", "probe 0.152, LoRA <b>0.301</b>, CatBoost 0.517",
+         "close &gt;= 50% of the probe-to-tree gap", "<b>fail</b> (40.7%)"],
+        ["<b>C10</b> read-out bandwidth: all-token concat vs the single row token, "
+         "no adapters", "single 0.152, mean 0.163, concat <b>0.261</b> - below the "
+         "LoRA reference", "close &gt;= 50% of the LoRA-left gap", "<b>fail</b>"],
     ],
     [52, 52, 32, 26])
-cap("Table 1: the five claims. C1/C2 on the 1M-row pacs.008 corpus (positive class 1.8%); "
-    "C3-C5 on the behavioural corpus, held-out accounts, PR-AUC on regime change. "
+cap("Table 1: the claims. C1/C2 on the 1M-row pacs.008 corpus (positive class 1.8%); "
+    "C3-C5 on the behavioural corpus, held-out accounts, PR-AUC on regime change; "
+    "C9/C10 a matched pair on a 20k CPU slice of the pacs.008 corpus (Section 5.4). "
     "Thresholds predate the runs; no configuration was retuned after a miss.")
 h3("5.1&nbsp;&nbsp;What replicated")
 body("C1 is the source paper's core engineering claim and it replicates cleanly: the "
@@ -408,6 +418,31 @@ body("C5 asks a narrow question: does the frozen LLM add accuracy on one fixed t
      "exactly one conclusion: the LLM is not required for fixed-menu accuracy. It "
      "does not license removing the decoder, and Section 7 describes the serving "
      "architecture that keeps it.")
+h3("5.4&nbsp;&nbsp;What the freeze costs (C9), what bandwidth buys (C10)")
+body("C2b left an open question: was the 44.5-point loss to CatBoost the price of the "
+     "frozen encoder, of the adapter family, or of the read-out contract - the whole "
+     "row compressed into one 512-d vector before any head sees it? Two follow-up "
+     "interventions on the SAME frozen encoder, run as a matched pair on a 20k-row "
+     "CPU slice, decompose it. C9 enriches the adapter family: low-rank (LoRA) "
+     "adapters inside the encoder's feed-forward layers - the base weights frozen "
+     "structurally, zero-initialised so step 0 is exactly the pretrained model, "
+     "328k trainable parameters. Converged with early stopping, LoRA doubles the "
+     "linear probe (0.152 to 0.301) yet closes only 40.7% of the gap to CatBoost "
+     "(0.517), under the pre-registered 50% bar. C10 widens only the read-out: a "
+     "linear head over all eleven token outputs instead of the row token, no "
+     "adapters, 5.6k head parameters. Full-bandwidth concat reaches 0.261 - a 72% "
+     "relative gain for zero backbone training, and still below the converged "
+     "LoRA arm.")
+body("The pair says something one intervention alone could not: adapter capacity and "
+     "read-out bandwidth each recover real signal, and neither - nor plausibly their "
+     "sum - reaches a tree that reads the label-generating rule off the raw features. "
+     "C2's deployment verdict is thereby confirmed by two independent interventions "
+     "rather than asserted once: complete-row rule labels belong to the tree, and the "
+     "twin's capability routing sends them there. The learned representation's wins "
+     "stay exactly where Sections 5.1 and 6 measured them - order, timing, partial "
+     "information, and fusion. Caveats attach: the pair ran at 20k rows (C2's "
+     "canonical scale is 1M), the encoder was pretrained on the same slice, and "
+     "torch's fused attention restricts LoRA to the feed-forward linears.")
 
 # ====================================================== 6 LIFECYCLE RESULTS
 h2("6&nbsp;&nbsp;The lifecycle extension: wins and nulls")
@@ -518,7 +553,10 @@ body("PULSE's frozen encoder does carry many payment decisions - provided one is
      "accuracy points on a fixed task (C5) - and stays, because the source paper's "
      "argument for it was never accuracy on a fixed task: it is the interface that "
      "prices a new question at one instruction string, and PULSE serves it as such. "
-     "The claims ledger, generators, and 198 tests reproduce every number in this "
+     "Where the label is a rule over a complete row, two further interventions - "
+     "richer adapters (C9) and wider read-outs (C10) - each recover real signal and "
+     "still lose to the tree, so the routing verdict is confirmed, not assumed. "
+     "The claims ledger, generators, and 209 tests reproduce every number in this "
      "paper from two commands.")
 
 # ====================================================== ANNEXURE A
