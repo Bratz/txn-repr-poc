@@ -1,5 +1,27 @@
 # The Payment Twin — three papers, one stack
 
+## Objective (the twin's constitution)
+
+The objective is a payment twin: one transaction foundation model that answers multiple
+question types in line with Raman et al., PRAGMA, and TransactionGPT — **with no conflicts**.
+The three apparent conflicts dissolve under two principles:
+
+1. **Frozen base, richer adapters.** All three papers freeze the backbone and train
+   parameter-efficient adapters; they differ only in adapter family (Raman's prompt-family
+   {Φ, ψ, φ}; PRAGMA's low-rank LoRA deltas - the base stays frozen in LoRA too; TGPT's task
+   heads). "LoRA vs the frozen-f invariant" was a false conflict: the invariant forbids
+   fine-tuning the giants, and LoRA doesn't. C9 measures the richer adapter family on the
+   SAME frozen encoder.
+2. **Role and grain separation.** The LLM is the interface (Raman's claim), never the scorer
+   (PRAGMA's lane: calibrated probes on frozen state) and never the simulator (TGPT's lane:
+   field heads + rollout). Raman's machinery owns the record grain, PRAGMA's shape the stream
+   grain, TGPT the trajectory grain - each keeps the representation its paper earned.
+
+Question routing: classification menu → instruction decoder; calibrated PDs / ETA / in-flight
+state → probes; forecasting / simulation → generative heads; brand-new question → an
+instruction + ψ row, escalating to a LoRA adapter (C9) only if it needs capacity; "why" →
+occlusion drivers (ours - all three papers are silent).
+
 The twin is the merge of three architectures, each contributing the mechanism it is best at.
 Every row below names the paper the mechanism comes from, where it lives in this repo, and the
 measured number that says it works (or honestly doesn't). Nothing in this table is aspirational.
