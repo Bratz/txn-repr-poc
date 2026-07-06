@@ -66,6 +66,13 @@ python -u run_c7.py --out results_c7.json
 # H. C8 - the TransactionGPT tier: next-field heads + generative rollout on the
 #    cadence fleet. Pass = beat per-actor naives on >= 2 of 3 fields.
 python -u run_gen.py --out results_gen.json
+
+# I. C9 - LoRA adapters on the SAME frozen encoder vs probe vs CatBoost on the
+#    C2 risk task. Needs the v1 corpus:
+#    python data/synth_pacs008.py --parents 20000 --transactions 1000000 \
+#        --out data/pacs008_synth.parquet --schema-out data/column_schema.json
+#    Pass = LoRA closes >= half the probe-to-CatBoost PR-AUC gap, base frozen.
+python -u run_c9.py --out results_c9_full.json
 ```
 
 ## 4. Copy back
