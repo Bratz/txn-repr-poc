@@ -73,6 +73,11 @@ python -u run_gen.py --out results_gen.json
 #        --out data/pacs008_synth.parquet --schema-out data/column_schema.json
 #    Pass = LoRA closes >= half the probe-to-CatBoost PR-AUC gap, base frozen.
 python -u run_c9.py --out results_c9_full.json
+
+# J. C10 - read-out bandwidth: single vs mean vs concat token read-outs on the
+#    same frozen encoder. Pass = best wide read-out closes >= half the gap
+#    run I's LoRA arm leaves open. Run AFTER run I (uses its LoRA reference).
+python -u run_c10.py --lora-ref $(python -c "import json;print(json.load(open('results_c9_full.json'))['lora_pr_auc'])") --out results_c10_full.json
 ```
 
 ## 4. Copy back
