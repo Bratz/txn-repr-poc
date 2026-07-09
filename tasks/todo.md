@@ -1,3 +1,57 @@
+# TODO — PRAGMA-alignment: close the input-model gaps (2026-07-06)
+
+Close the four gaps between the twin's hybrid input (pacs.008 spine + pain.001 enrichment +
+lifecycle stream) and PRAGMA's input contract. ALL ITEMS ADDITIVE — dismantling analysis at
+the bottom. Order = predicted payoff per effort.
+
+- [x] **C11 — entity-level fusion (the big one).** DONE except serving arg (deferred to
+  post-verdict, measure-first — stated amendment); verdict = runbook K. Score the CURRENT payment conditioned on
+  the ACCOUNT's full history (all prior payments' lifecycle events + profile), PRAGMA-style.
+  1. Generator first: `IndiaConfig.recall_momentum=0.0` (default OFF) — an account with past
+     recalls/returns gets an elevated hazard for future ones (the signal must exist to find;
+     `acct_heat`/`exception_momentum` is the pattern to extend). New seeded corpora only when
+     the knob is ON; every existing number stays reproducible.
+  2. Entity timeline builder: per-account time-ordered stream of ALL its messages
+     (visibility-filtered) across payments — reuse `message_prefix_sequences` + history
+     encoder; h_entity via `encode_histories`.
+  3. Fusion: in-flight heads read [prefix features ⊕ h_entity] (the origination-fusion
+     pattern from run_impute, applied at the in-flight grain).
+  4. Pre-register: with momentum ON, return/cancel PR-AUC (entity-fused vs prefix-only)
+     >= +5pp on held-out accounts; with momentum OFF, expect ~0 (the honest null control).
+  5. Serving: `predict_stream(msg_df, account_history=None)` — OPTIONAL new argument;
+     payment-only path unchanged (stateless contract preserved).
+- [x] **C12 — life-long events (cheapest).** DONE; smoke null as pre-stated; verdict =
+  runbook L (default + momentum-ON readings). Timed milestones on the [USR]/profile side:
+  first_payment / first_crossborder / first_recall / account_age, encoded as
+  log-time-since-milestone at the evaluation point (PRAGMA's life-long items). Measure on
+  the DOCUMENTED weak spot: cold-start / young-account rail+risk accuracy (accounts with
+  < N events), with vs without tenure features. Threshold: any significant lift on the
+  young-account slice without degrading the full slice.
+- [x] **C13 — sub-day time resolution (surgical).** DONE — folded into C11's entity
+  timeline (fractional-day dt from t_offset_min; test pins the 90-min case). Payment-date
+  sequences untouched as planned; msgseq was already minute-granular. `seq_from_dates` casts to datetime64[D];
+  message streams carry `t_offset_min` that the history encoder never sees. Add fractional-
+  day dt ONLY where minute data exists (message-timeline sequences: msgseq, in-flight, C11
+  entity stream) via an OPT-IN parameter. Payment-date sequences (C3/C4/velocity/C7/C8)
+  UNTOUCHED — their measured numbers were earned with day-granular dt and stay comparable.
+- [ ] **Key–value tokenizer — deferred, trigger-based.** Not scheduled. Trigger: a measured
+  ceiling attributable to schema-forcing (e.g. C11's entity stream underperforming with
+  null-padded message rows). Until a number demands it, the fixed-schema spine carries C1.
+
+## Dismantling analysis (explicit)
+
+- **Nothing is removed.** C11 = new fusion input + optional API argument; C12 = new profile
+  features; C13 = opt-in resolution; tokenizer = deferred.
+- **Two near-misses guarded:** (1) generator momentum knobs DEFAULT OFF so all seeded corpora
+  and measured claims (C1–C10) remain byte-reproducible; (2) C13 is opt-in per sequence
+  family so no previously measured dt-dependent number silently shifts.
+- **Serving contracts:** predict_stream stays valid without account history (stateless path
+  preserved); /score/ask, velocity, forecast, liquidity untouched.
+- **Pending GPU verdicts (runs F/G/H/I) unaffected** — none of these items touch run_india
+  --paper-serving, run_c7, run_gen, or run_c9 paths.
+
+---
+
 # TODO — ISO 20022 lifecycle + predict-at-initiation (2026-07-01)
 
 Model the training data as the ISO message lifecycle (multi-source) and add lifecycle

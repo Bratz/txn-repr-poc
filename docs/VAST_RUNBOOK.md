@@ -78,6 +78,14 @@ python -u run_c9.py --out results_c9_full.json
 #    same frozen encoder. Pass = best wide read-out closes >= half the gap
 #    run I's LoRA arm leaves open. Run AFTER run I (uses its LoRA reference).
 python -u run_c10.py --lora-ref $(python -c "import json;print(json.load(open('results_c9_full.json'))['lora_pr_auc'])") --out results_c10_full.json
+
+# K. C11 - entity fusion for in-flight cancel/return, momentum ON vs OFF (null
+#    control) fleets. Pass = ON fused >= +5pp AND the null stays null.
+python -u run_c11.py --out results_c11_full.json
+
+# L. C12 - life-long milestones at intake, default (expect null) + momentum-ON
+python -u run_c12.py --out results_c12_full.json
+python -u run_c12.py --momentum 1.0 --out results_c12_momentum.json
 ```
 
 ## 4. Copy back

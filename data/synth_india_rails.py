@@ -142,6 +142,10 @@ class IndiaConfig:
     # base share of in-flight payments the originator recalls (camt.056). Feature-modulated:
     # higher for very large or fraud-flagged payments (so cancel-likelihood is learnable).
     cancel_frac: float = 0.03
+    # C11: an account's PRIOR recalls elevate its future recall hazard (account-level
+    # clustering a date-ordered entity timeline can detect). 0.0 = OFF = byte-identical
+    # corpora to before the knob existed (multiplier 1, no extra rng draws).
+    recall_momentum: float = 0.0
     # TEMPORAL CORRELATION hook: >0 makes an account's exception probability rise after its
     # previous payment hit an exception (heat x(1+m), decaying toward 1 when clean). Gives
     # account HISTORY predictive power over the next payment's outcome - the data change the
@@ -377,7 +381,8 @@ def _cadence_payments(cfg, rng, in_accs, start):
 
 
 def _finish_row(row, pid, rail, identifier, amount, xborder, direction, status,
-                events, exceptions, seconds, src, dest, cfg, rng, cadence="none"):
+                events, exceptions, seconds, src, dest, cfg, rng, cadence="none",
+                prior_recalls=0):
     """Shared per-payment labelling: rail/instrument metadata, amount split (FX + charges),
     mis-routed flag, reject reason, cancellation/return legs, exception flags, cadence."""
     row["payment_id"] = pid
@@ -411,7 +416,8 @@ def _finish_row(row, pid, rail, identifier, amount, xborder, direction, status,
     # cancellation (camt.056) + return (pacs.004) labels; recallable once past submission.
     reached_clearing = not (status == "REJECTED" and halt_step in PRE_SUBMISSION)
     p_cancel = cfg.cancel_frac * (1 + 2 * int(amount > 1_000_000)
-                                  + int("fraud_hold" in exceptions))
+                                  + int("fraud_hold" in exceptions)) \
+        * (1 + cfg.recall_momentum * prior_recalls)
     cancel_requested = reached_clearing and rng.random() < min(p_cancel, 0.5)
     cancel_status = "none"
     if cancel_requested:
@@ -444,6 +450,7 @@ def build_dataset(cfg: IndiaConfig):
 
     pay_rows, evt_rows = [], []
     acct_heat: dict = {}                    # account -> exception-momentum multiplier
+    acct_recalls: dict = {}                 # account -> prior cancel_requested count (C11)
     pid = 0
     while len(pay_rows) < cfg.num_payments:
         if scheduled:                        # standing patterns first, then ad-hoc fill
@@ -460,7 +467,10 @@ def build_dataset(cfg: IndiaConfig):
                                      assign_risk(src, dest, amount, rng),
                                      assign_geo(src, dest), assign_expense(dest), "No", pid)
             _finish_row(row, pid, rail, identifier, amount, False, direction, status,
-                        events, exceptions, seconds, src, dest, cfg, rng, cadence=cadence)
+                        events, exceptions, seconds, src, dest, cfg, rng, cadence=cadence,
+                        prior_recalls=acct_recalls.get(src.account_id, 0))
+            acct_recalls[src.account_id] = (acct_recalls.get(src.account_id, 0)
+                                            + row["cancel_requested"])
             pay_rows.append(row)
             for seq, (step, outcome, tsec) in enumerate(events):
                 evt_rows.append({"payment_id": pid, "seq": seq, "step": step,
@@ -502,7 +512,10 @@ def build_dataset(cfg: IndiaConfig):
                                  assign_risk(src, dest, amount, rng), assign_geo(src, dest),
                                  assign_expense(dest), "No", pid)
         _finish_row(row, pid, rail, identifier, amount, xborder, direction, status,
-                    events, exceptions, seconds, src, dest, cfg, rng)
+                    events, exceptions, seconds, src, dest, cfg, rng,
+                    prior_recalls=acct_recalls.get(src.account_id, 0))
+        acct_recalls[src.account_id] = (acct_recalls.get(src.account_id, 0)
+                                        + row["cancel_requested"])
         pay_rows.append(row)
 
         for seq, (step, outcome, tsec) in enumerate(events):
