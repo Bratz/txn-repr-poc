@@ -1,0 +1,233 @@
+{
+  "U1_repeat_recall_entity": {
+    "actor": "0DHBOQ7M",
+    "n_payments": 15,
+    "n_recalls": 2,
+    "recalled_payment_trail": [
+      "pain.001()",
+      "pain.002(ACCP)",
+      "pacs.008()",
+      "pacs.002(ACSC)",
+      "camt.054(BOOK)",
+      "camt.056()",
+      "camt.029(RJCR)"
+    ],
+    "inflight": {
+      "end_to_end_id": "E2E-00005835",
+      "n_msgs": 7,
+      "last_msg_type": "camt.029",
+      "booked_proba": 0.9696,
+      "settlement_outcome": {
+        "MANUAL_REVIEW": 0.0259,
+        "REJECTED": 0.0296,
+        "REPAIRED": 0.1593,
+        "STP": 0.7853
+      },
+      "eta_remaining_min": 2.1,
+      "reject_reason_if_failed": {
+        "code": "ED05",
+        "score": 0.2404
+      },
+      "cancel_proba": 0.4412,
+      "return_proba": 0.0156
+    },
+    "velocity": {
+      "actor": "0DHBOQ7M",
+      "n_txns": 15,
+      "burst_proba": 0.1319,
+      "burst_rule": 0
+    },
+    "forecast_next": {
+      "actor": "0DHBOQ7M",
+      "n_history": 15,
+      "next_event_proba": 0.6103,
+      "expected_gap_days": 14.2,
+      "expected_amount": 33594.8984,
+      "top_payee_hint": "ESECC1J6",
+      "horizon_days": 35
+    }
+  },
+  "U2_recall_contrast": {
+    "recall_succeeded_CNCL": {
+      "trail": [
+        "pain.001()",
+        "pain.002(ACCP)",
+        "pacs.008()",
+        "pacs.002(ACSC)",
+        "camt.054(BOOK)",
+        "camt.056()",
+        "camt.029(CNCL)",
+        "pacs.004()"
+      ],
+      "inflight": {
+        "end_to_end_id": "E2E-00000020",
+        "n_msgs": 8,
+        "last_msg_type": "pacs.004",
+        "booked_proba": 0.8783,
+        "settlement_outcome": {
+          "MANUAL_REVIEW": 0.0055,
+          "REJECTED": 0.0526,
+          "REPAIRED": 0.1128,
+          "STP": 0.8291
+        },
+        "eta_remaining_min": 1.3,
+        "reject_reason_if_failed": {
+          "code": "AC04",
+          "score": 0.2976
+        },
+        "cancel_proba": 0.0454,
+        "return_proba": 0.25
+      }
+    },
+    "recall_too_late_RJCR": {
+      "trail": [
+        "pain.001()",
+        "pain.002(ACCP)",
+        "pacs.008()",
+        "pacs.002(ACSC)",
+        "camt.054(BOOK)",
+        "camt.056()",
+        "camt.029(RJCR)"
+      ],
+      "inflight": {
+        "end_to_end_id": "E2E-00000001",
+        "n_msgs": 7,
+        "last_msg_type": "camt.029",
+        "booked_proba": 0.9773,
+        "settlement_outcome": {
+          "MANUAL_REVIEW": 0.0414,
+          "REJECTED": 0.0118,
+          "REPAIRED": 0.1319,
+          "STP": 0.8149
+        },
+        "eta_remaining_min": 1.1,
+        "reject_reason_if_failed": {
+          "code": "FRAD",
+          "score": 0.622
+        },
+        "cancel_proba": 0.5,
+        "return_proba": 0.024
+      }
+    }
+  },
+  "U3_salary_cadence_forecast": {
+    "actor": "VHOX83HN",
+    "forecast_next": {
+      "actor": "VHOX83HN",
+      "n_history": 10,
+      "next_event_proba": 0.6103,
+      "expected_gap_days": 12.3,
+      "expected_amount": 32360.0293,
+      "top_payee_hint": "OZO0UKHN",
+      "horizon_days": 35
+    }
+  },
+  "U4_burst_account": {
+    "actor": "0JRGLM5B",
+    "median_gap_days": 7.0,
+    "velocity": {
+      "actor": "0JRGLM5B",
+      "n_txns": 13,
+      "burst_proba": 0.2917,
+      "burst_rule": 0
+    }
+  },
+  "U5_ask_guard": {
+    "status_code": 409,
+    "detail": "this bundle has no instruction decoder - retrain with `run_india.py --paper-serving --save <dir>`"
+  },
+  "U6_four_rails_one_batch": [
+    {
+      "rail_pred": "NEFT",
+      "rail_conf": 0.0,
+      "status_pred": "REPAIRED",
+      "eta_min_pred": 1602.9,
+      "risk_pred": "High",
+      "geography_pred": "International",
+      "expense_pred": "Other",
+      "top_exception_risks": [
+        {
+          "code": "sanctions_hit",
+          "score": 0.1
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "no_route",
+          "score": 0.04
+        }
+      ]
+    },
+    {
+      "rail_pred": "NEFT",
+      "rail_conf": 0.0,
+      "status_pred": "REPAIRED",
+      "eta_min_pred": 1535.8,
+      "risk_pred": "High",
+      "geography_pred": "International",
+      "expense_pred": "Other",
+      "top_exception_risks": [
+        {
+          "code": "sanctions_hit",
+          "score": 0.09
+        },
+        {
+          "code": "missing_field",
+          "score": 0.07
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        }
+      ]
+    },
+    {
+      "rail_pred": "NEFT",
+      "rail_conf": 0.0,
+      "status_pred": "REPAIRED",
+      "eta_min_pred": 1650.3,
+      "risk_pred": "High",
+      "geography_pred": "International",
+      "expense_pred": "Other",
+      "top_exception_risks": [
+        {
+          "code": "sanctions_hit",
+          "score": 0.1
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        },
+        {
+          "code": "no_cover",
+          "score": 0.03
+        }
+      ]
+    },
+    {
+      "rail_pred": "SWIFT",
+      "rail_conf": 1.0,
+      "status_pred": "REPAIRED",
+      "eta_min_pred": 2059.8999,
+      "risk_pred": "Medium",
+      "geography_pred": "International",
+      "expense_pred": "Other",
+      "top_exception_risks": [
+        {
+          "code": "no_route",
+          "score": 0.05
+        },
+        {
+          "code": "sanctions_hit",
+          "score": 0.05
+        },
+        {
+          "code": "format_error",
+          "score": 0.04
+        }
+      ]
+    }
+  ]
+}

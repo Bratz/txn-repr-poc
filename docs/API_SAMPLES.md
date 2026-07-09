@@ -257,3 +257,87 @@ Capped at 10 payments (~20x embed cost). Occlude a field -> re-embed -> measure 
 ```
 
 Bundle without in-flight/velocity/next heads -> **409** with a retrain hint.
+
+---
+
+# Annexure B — unique cases (momentum + cadence fleet)
+
+Captured live against the same bundle from a SECOND fleet (500x12k, seed 23,
+`cadence_frac=0.4`, `recall_momentum=1.0`). Raw pairs: `docs/annex_capture2.json`;
+regenerate with `docs/capture_unique.py`. **Read the cold-start note at the bottom
+first** — this fleet is a different account universe than the bundle's training
+fleet, which is itself one of the cases being demonstrated.
+
+## B.1 Repeat-recall account — one actor through three APIs
+
+Account `0DHBOQ7M` (15 payments, 2 recalls under momentum). Its recalled payment's
+trail `pain.001 -> pain.002(ACCP) -> pacs.008 -> pacs.002(ACSC) -> camt.054(BOOK)
+-> camt.056 -> camt.029(RJCR)` through `/score/inflight`:
+
+```json
+{"booked_proba": 0.9696, "cancel_proba": 0.4412, "return_proba": 0.0156,
+ "settlement_outcome": {"STP": 0.7853, "REPAIRED": 0.1593, "MANUAL_REVIEW": 0.0259,
+                        "REJECTED": 0.0296}}
+```
+
+`cancel_proba` ~10x the clean-lifecycle baseline (Annexure A: 0.026-0.05) — the
+recall legs are read directly. Same actor via `/score/velocity`: burst 0.1319;
+via `/forecast/next`: gap 14.2d, amount 33,595.
+
+## B.2 The recall contrast — funds returned vs recall refused
+
+Two payments, identical until camt.029:
+
+| | CNCL + pacs.004 (funds return) | RJCR (recall too late) |
+|---|---|---|
+| return_proba | **0.25** | **0.024** |
+| cancel_proba | 0.0454 (resolved) | 0.50 (live dispute) |
+| reject_reason_if_failed | AC04 0.298 | FRAD 0.622 |
+
+The message trail alone distinguishes the two endings of a recall.
+
+## B.3 Salary-cadence account -> `/forecast/next`
+
+`VHOX83HN`: P(next<=35d) 0.6103, expected gap **12.3d**, amount 32,360. Gap is
+shorter than the monthly salary cycle because the head forecasts the ACCOUNT's
+next event and this account also carries ad-hoc traffic.
+
+## B.4 Tightest-gap account -> `/score/velocity`
+
+`0JRGLM5B` (median gap 7.0d): burst_proba 0.2917, burst_rule 0 — elevated, not
+alarmed, for steady weekly traffic.
+
+## B.5 `/score/ask` on a bundle without the decoder tier
+
+```json
+{"status_code": 409,
+ "detail": "this bundle has no instruction decoder - retrain with `run_india.py --paper-serving --save <dir>`"}
+```
+
+The fail-loud contract for the paper-exact tier (runbook run F produces the
+decoder bundle).
+
+## B.6 Four rails, one intake batch — and the cold-start demonstration
+
+A clean domestic template row with only the amount (and, for the last, scope)
+varied:
+
+```
+             5,000 -> NEFT  conf 0.000 | REPAIRED | ETA 1473.4 min | risk Medium
+           150,000 -> IMPS  conf 0.001 | REPAIRED | ETA 1453.6 min | risk Medium
+           900,000 -> RTGS  conf 0.001 | REJECTED | ETA 1397.2 min | risk High
+  200,000 x-border -> SWIFT conf 1.000 | REPAIRED | ETA 1982.7 min | risk Medium
+```
+
+The routing is correct per amount band — but the ~0.001 confidences are the
+point: **this fleet's accounts are out-of-vocabulary for the bundle**, so the
+identity-driven probe collapses (the documented cold-start behaviour) and the
+ELIGIBILITY GUARD is what routes correctly. SWIFT's 1.00 is structural
+(cross-border instrument). The same effect produces the repeated 0.6103
+occurrence probabilities in B.1/B.3 — the isotonic calibrator's plateau for
+out-of-vocabulary inputs. Message-driven results (B.1/B.2) are unaffected:
+lifecycle one-hots do not depend on knowing the account.
+
+A bonus guard, found by accident: building B.6 from a cross-border template with
+domestic amounts (a contradictory instrument) returns conf 0.0 with valid
+fallback routing rather than an error — garbage in, guarded low-confidence out.
