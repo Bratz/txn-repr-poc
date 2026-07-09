@@ -61,6 +61,8 @@ def fleet_result(momentum, args, device):
                      np.asarray(np.array(pay["IntrBkSttlmDt"], dtype="datetime64[D]")
                                 .astype(np.int64), dtype=float)))
     pactor = dict(zip(pay["payment_id"], pay["DbtrAcct_Id"].astype(str)))
+    pcancel = dict(zip(pay["payment_id"], pay["cancel_requested"]))
+    preturn = dict(zip(pay["payment_id"], pay["returned"]))
     by_pid = {pid: g for pid, g in msg_sorted.groupby("payment_id")}
     X_base, ent_seqs, ys, actors = [], [], [], []
     for pid in pay["payment_id"]:
@@ -80,8 +82,7 @@ def fleet_result(momentum, args, device):
         pool = e_msg[g.index.to_numpy()].mean(0).cpu().numpy()
         X_base.append(_prefix_features(pool, g))
         ent_seqs.append(seq)
-        row = pay[pay["payment_id"] == pid].iloc[0]
-        ys.append((int(row["cancel_requested"]), int(row["returned"])))
+        ys.append((int(pcancel[pid]), int(preturn[pid])))
         actors.append(actor)
     X_base = np.asarray(X_base, dtype=np.float32)
     ys = np.asarray(ys)
