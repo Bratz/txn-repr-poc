@@ -13,6 +13,16 @@ Reviewed at session start.
 
 ## Data / modelling correctness
 
+- **Pre-register with a power check.** C11/C12 burned three full CPU runs on thresholds
+  (+5pp / +1pp) that were mathematically unreachable: the planted effect was 2x per-row but
+  fired on 5.2% of rows, capping the extractable PR-AUC delta at ~+0.3pp. Before registering
+  a threshold, compute the CEILING first (effect size x coverage -> max metric delta with a
+  perfect detector — a 30-second pandas check, no encoder needed). If the ceiling is under
+  the threshold, fix the generator knob or the threshold before any run.
+- **Diagnose with the raw feature before blaming the architecture.** The first C11 diagnosis
+  ("pooling swallows rare legs") was wrong and got committed; the direct AP-of-the-raw-feature
+  check refuted it in one command. Run the cheapest decisive check FIRST, then write diagnoses.
+
 - **Label leakage hides in "consequence" columns.** A feature that is a deterministic
   function of the label (here: `SttlmMtd`, and later caught in review: `Ccy`, counterparty
   country, near-deterministic `identifier_type`) silently inflates a reported metric. Before
